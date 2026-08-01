@@ -143,15 +143,12 @@ const productSchema = new mongoose.Schema(
     // Código de barras (EAN-13 del fabricante o interno) — validación de picking por escaneo
     barcode: { type: String, trim: true, default: "" },
 
-    // Ubicación física en bodega (WMS liviano): pasillo/zona - rack - nivel
+    // Ubicación física en bodega: pasillo/zona - rack - nivel
     location: {
       zone: { type: String, trim: true, default: "" },
       rack: { type: String, trim: true, default: "" },
       level: { type: String, trim: true, default: "" },
-      code: { type: String, trim: true, default: "" }, // ej: "A-03-2", visible en el picking
-      // Sector físico (nombre del Sector) para agrupar la boleta y el ticket de
-      // picking por zona de recorrido. Re-mapeable editando el producto.
-      sector: { type: String, trim: true, default: "" },
+      code: { type: String, trim: true, default: "" }, // ej: "A-03-2", visible al preparar
     },
 
     // Precio de referencia en supermercado tradicional (para mostrar ahorro)

@@ -76,16 +76,6 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
   const d60 = new Date(now.getTime() - 60 * 86400000);
   const v7 = new Date(now.getTime() + 7 * 86400000);
 
-  // Pedido "de sala" (relay): tiene boleta escaneable o vendedor atribuido —
-  // mismo criterio esSala que /gerencia. Versión query y versión aggregate.
-  const esSala = (o) => Boolean(o.codigo_escaneo || o.seller?.id);
-  const esSalaExpr = {
-    $or: [
-      { $ne: [{ $ifNull: ["$codigo_escaneo", null] }, null] },
-      { $ne: [{ $ifNull: ["$seller.id", null] }, null] },
-    ],
-  };
-
   const [
     ventas12Agg,
     margenDiaAgg,
@@ -102,7 +92,6 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
     units30Agg,
     comprasAgg,
     deliveredHoy,
-    vendHoyAgg,
   ] = await Promise.all([
     // Venta por día, últimos 12 días (cubre hoy/ayer + sparkVentas). Mismo criterio que /gerencia.
     Order.aggregate([
@@ -133,10 +122,10 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
       { $match: { status: ORDER_STATUS.DELIVERED, delivered_at: { $gte: spark0, $lte: hoy1 } } },
       { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$delivered_at", timezone: TZ } }, n: { $sum: 1 } } },
     ]),
-    // Cola actual (en vivo) por estado + cuántos pending son de sala (relay).
+    // Cola actual (en vivo) por estado.
     Order.aggregate([
       { $match: { status: { $in: ["pending", "paid", "preparing", "ready"] } } },
-      { $group: { _id: "$status", n: { $sum: 1 }, sala: { $sum: { $cond: [esSalaExpr, 1, 0] } } } },
+      { $group: { _id: "$status", n: { $sum: 1 } } },
     ]),
     // En preparación AHORA → atrasados = llevan > 30 min desde que entraron a preparing.
     Order.find({ status: ORDER_STATUS.PREPARING }).select("status_history").lean(),
@@ -231,15 +220,9 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
         },
       },
     ]),
-    // Entregados HOY con historial → tiempos del día, SLA y productividad de equipo.
+    // Entregados HOY con historial → tiempos del día, SLA y productividad de preparación.
     Order.find({ status: ORDER_STATUS.DELIVERED, delivered_at: mongoose.trusted({ $gte: hoy0, $lte: hoy1 }) })
-      .select("total created_at delivered_at status_history codigo_escaneo seller").lean(),
-    // Vendedores del día: atribución por Order.seller sobre pagados de hoy —
-    // mismo criterio que /gerencia (los pedidos web sin seller quedan fuera).
-    Order.aggregate([
-      { $match: { ...paidMatch(hoy0, hoy1), "seller.id": { $ne: null } } },
-      { $group: { _id: "$seller.id", nombre: { $first: "$seller.nombre" }, pedidos: { $sum: 1 }, monto: { $sum: "$total" } } },
-    ]),
+      .select("total created_at delivered_at status_history").lean(),
   ]);
 
   // ── KPIs del día ──
@@ -254,10 +237,8 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
   };
 
   const cola = { pending: 0, paid: 0, preparing: 0, ready: 0 };
-  let pendingSala = 0;
   colaAgg.forEach((x) => {
     cola[x._id] = x.n;
-    if (x._id === "pending") pendingSala = x.sala || 0;
   });
 
   // Atrasados: en preparación hace más de 30 minutos (por status_history).
@@ -363,35 +344,24 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
     topProveedores: porCampo(lotes30, "proveedor").filter((x) => x.monto > 0).sort((a, b) => b.monto - a.monto).slice(0, 5),
   };
 
-  // ── Logística + productividad (de los entregados de hoy, mismo criterio que
-  // operacion/equipo de /gerencia: tiempos solo de pedidos de sala) ──
+  // ── Logística + productividad (de los entregados de hoy) ──
   const tPrep = [];   // preparing → ready
   const tTotal = [];  // created → delivered
-  const caje = {}, bode = {};
+  const prepPorPersona = {};
   for (const o of deliveredHoy) {
-    const sala = esSala(o);
     const created = new Date(o.created_at).getTime();
-    const paid = firstTs(o.status_history, "paid");
     const prep = firstTs(o.status_history, "preparing");
     const ready = firstTs(o.status_history, "ready");
     const del = firstTs(o.status_history, "delivered") || new Date(o.delivered_at).getTime();
     const pm = mins(prep, ready);
     const tot = mins(created, del);
-    const ec = mins(created, paid);
-    if (sala && pm != null) tPrep.push(pm);
-    if (sala && tot != null) tTotal.push(tot);
-    const c = actorOf(o.status_history, "paid");
-    if (c) {
-      caje[c] = caje[c] || { nombre: c, cobros: 0, monto: 0, _t: [] };
-      caje[c].cobros++;
-      caje[c].monto += o.total || 0;
-      if (sala && ec != null) caje[c]._t.push(ec);
-    }
+    if (pm != null) tPrep.push(pm);
+    if (tot != null) tTotal.push(tot);
     const b = actorOf(o.status_history, "preparing");
     if (b) {
-      bode[b] = bode[b] || { nombre: b, pedidos: 0, _t: [] };
-      bode[b].pedidos++;
-      if (pm != null) bode[b]._t.push(pm);
+      prepPorPersona[b] = prepPorPersona[b] || { nombre: b, pedidos: 0, _t: [] };
+      prepPorPersona[b].pedidos++;
+      if (pm != null) prepPorPersona[b]._t.push(pm);
     }
   }
 
@@ -400,7 +370,7 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
     // Pipeline real del día: volúmenes de hoy en las puntas, colas EN VIVO al medio.
     etapas: [
       { etapa: "Ingresados", n: kpisDia.ingresados },
-      { etapa: "Por cobrar", n: pendingSala }, // pending AHORA, solo pedidos de sala
+      { etapa: "Por pagar", n: cola.pending },
       { etapa: "Por preparar", n: cola.paid },
       { etapa: "En preparación", n: cola.preparing },
       { etapa: "Listos", n: cola.ready },
@@ -416,18 +386,12 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
   };
 
   const productividad = {
-    pickers: Object.values(bode)
+    preparacion: Object.values(prepPorPersona)
       .map((x) => {
         const prom = avg(x._t); // exacto, antes de redondear, para pedidosHora
         return { nombre: x.nombre, pedidos: x.pedidos, tiempoPromMin: r0(prom), pedidosHora: prom > 0 ? r1(60 / prom) : null };
       })
       .sort((a, b) => b.pedidos - a.pedidos),
-    cajeras: Object.values(caje)
-      .map((x) => ({ nombre: x.nombre, cobros: x.cobros, monto: r0(x.monto), tiempoPromMin: x._t.length ? r0(avg(x._t)) : null }))
-      .sort((a, b) => b.monto - a.monto),
-    vendedores: vendHoyAgg
-      .map((x) => ({ nombre: x.nombre || "Vendedor", pedidos: x.pedidos, monto: r0(x.monto), ticket: x.pedidos ? r0(x.monto / x.pedidos) : 0 }))
-      .sort((a, b) => b.monto - a.monto),
   };
 
   // ── Rentabilidad del mes (mismo criterio finanzas de /gerencia:

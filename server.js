@@ -5,7 +5,6 @@ import { logger } from "./src/utils/logger.js";
 import { startPendingOrderExpiryJob } from "./src/jobs/expirePendingOrders.js";
 import { startReservationReleaseJob } from "./src/jobs/releaseExpiredReservations.js";
 import { startKeepWarmJob } from "./src/jobs/keepWarm.js";
-import { ensureRelaySeed } from "./src/jobs/ensureRelaySeed.js";
 import { startTelegramBot } from "./src/jobs/telegramBot.js";
 
 const start = async () => {
@@ -17,11 +16,6 @@ const start = async () => {
   const server = app.listen(env.PORT, "0.0.0.0", () => {
     logger.info({ port: env.PORT, env: env.NODE_ENV }, "Cibox API listening");
   });
-  // Producción: asegura sectores del relay + clasificación de productos sin bloquear
-  // el arranque. NO crea pedidos demo ni cuentas con contraseña por defecto; el
-  // bootstrap de usuarios requiere SEED_RELAY_USERS + SEED_RELAY_PASSWORD explícitos.
-  if (env.NODE_ENV === "production") ensureRelaySeed();
-
   const shutdown = (signal) => {
     logger.info({ signal }, "Shutting down");
     stopExpiryJob();

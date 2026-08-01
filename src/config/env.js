@@ -32,15 +32,9 @@ const envSchema = z.object({
 
   ALLOWED_ORIGINS: z.string().default(""),
 
-  // Módulos comerciales activos (csv): web, bodega, sala, gerencia.
+  // Módulos comerciales activos (csv): web, bodega, gerencia.
   // Los frontends consultan GET /api/config/modules para ocultar lo no contratado.
-  MODULES_ENABLED: z.string().default("web,bodega,sala,gerencia"),
-
-  // Bootstrap OPCIONAL de cuentas operativas del relay al arrancar. Desactivado
-  // por defecto: en producción NO se crea ningún usuario salvo que se active
-  // explícitamente Y se provea una contraseña (nunca hardcodeada en el código).
-  SEED_RELAY_USERS: z.coerce.boolean().default(false),
-  SEED_RELAY_PASSWORD: z.string().default(""),
+  MODULES_ENABLED: z.string().default("web,bodega,gerencia"),
 
   JWT_SECRET: z
     .string()

@@ -6,7 +6,7 @@ import { logger } from "../utils/logger.js";
 
 /**
  * Resuelve el filtro de Product para un scope de conteo.
- *  - sector   → productos activos en location.sector === value
+
  *  - category → productos activos cuya categoría (primaria o multi-cat) es value
  *  - all      → todos los productos activos
  * NO usa $expr (rompe sanitizeFilter); $or normal está permitido.
@@ -15,10 +15,6 @@ const scopeFilter = (scope) => {
   const type = String(scope?.type || "").trim();
   const value = String(scope?.value ?? "").trim();
 
-  if (type === "sector") {
-    if (!value) throw new BadRequestError("El sector del conteo es obligatorio");
-    return { is_active: true, "location.sector": value };
-  }
   if (type === "category") {
     if (!value) throw new BadRequestError("La categoría del conteo es obligatoria");
     return { is_active: true, $or: [{ "category.id": value }, { category_ids: value }] };
@@ -26,7 +22,7 @@ const scopeFilter = (scope) => {
   if (type === "all") {
     return { is_active: true };
   }
-  throw new BadRequestError("scope.type inválido (sector | category | all)");
+  throw new BadRequestError("scope.type inválido (category | all)");
 };
 
 const labelForScope = (scope) => {
@@ -35,7 +31,7 @@ const labelForScope = (scope) => {
   const label = String(scope?.label || "").trim();
   if (label) return label;
   const value = String(scope?.value ?? "").trim();
-  return type === "sector" ? `Sector ${value}` : `Categoría ${value}`;
+  return `Categoría ${value}`;
 };
 
 const normalizeBy = (by) => ({

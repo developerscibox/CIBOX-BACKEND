@@ -322,7 +322,7 @@ export const getStockSummary = asyncHandler(async (req, res) => {
 /**
  * POST /api/inventory/counts
  * Inicia un conteo físico (cycle count). Snapshotea los productos del scope.
- * body: { scope: { type: "sector"|"category"|"all", value?, label? } }
+ * body: { scope: { type: "category"|"all", value?, label? } }
  */
 export const postStartCount = asyncHandler(async (req, res) => {
   if (!roleHasPermission(req.user?.role, PERMISSIONS.INVENTORY_ADJUST)) {

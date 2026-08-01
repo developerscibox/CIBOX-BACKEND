@@ -432,7 +432,6 @@ export const receiveStock = async ({ supplier, doc_ref, items, expiry_date, by }
             ? Number(item.unit_cost)
             : 0;
         const batchLocation = {
-          sector: String(item.location?.sector ?? updated.location?.sector ?? "").trim(),
           zone: String(item.location?.zone ?? updated.location?.zone ?? "").trim(),
           rack: String(item.location?.rack ?? updated.location?.rack ?? "").trim(),
           level: String(item.location?.level ?? updated.location?.level ?? "").trim(),

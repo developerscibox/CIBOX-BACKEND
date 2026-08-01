@@ -22,7 +22,7 @@ export const rotacionSchema = {
 
 export const rankingSchema = {
   query: z.object({
-    by: z.enum(["vendedor", "producto", "cliente"]).optional(),
+    by: z.enum(["producto", "cliente"]).optional(),
     from: isoDate.optional(),
     to: isoDate.optional(),
     limit: z.coerce.number().int().min(1).max(100).optional(),

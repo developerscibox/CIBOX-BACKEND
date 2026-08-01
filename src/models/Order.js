@@ -18,7 +18,7 @@ const orderItemSchema = new mongoose.Schema(
     box_id: { type: String, default: null },
     name: { type: String, required: true, trim: true },
     quantity: { type: Number, required: true, min: 1 }, // total de UNIDADES (cajas × box_qty)
-    cajas: { type: Number, default: null, min: 0 },     // nº de cajas pedidas (relay de sala)
+    cajas: { type: Number, default: null, min: 0 },     // nº de cajas pedidas
     box_qty: { type: Number, default: null, min: 0 },   // unidades por caja (snapshot)
     price: { type: Number, required: true, min: 0 },
     original_price: { type: Number, min: 0 },
@@ -33,8 +33,6 @@ const orderItemSchema = new mongoose.Schema(
     },
     subtotal: { type: Number, required: true, min: 0 },
     original_subtotal: { type: Number, min: 0 },
-    // Sector físico de bodega (snapshot al crear) para agrupar boleta y ticket de picking.
-    sector: { type: String, default: "", trim: true },
     product_type: {
       type: String,
       enum: ["simple", "box"],
@@ -79,25 +77,14 @@ const orderSchema = new mongoose.Schema(
     guest_id: { type: String, default: null },
     guest_token_hash: { type: String, default: null, select: false },
     items: { type: [orderItemSchema], default: [] },
-    // Relay de sala: código que lleva la boleta (lo escanea la cajera para traer el
-    // pedido) y el número de turno atendido. codigo_escaneo es único cuando existe.
-    codigo_escaneo: { type: String, default: null, index: true, sparse: true },
-    turno_numero: { type: String, default: null },
     customer: {
       fullName: { type: String, default: null, trim: true },
       email: { type: String, default: null, trim: true, lowercase: true },
       phone: { type: String, default: null, trim: true },
       rut: { type: String, default: null, trim: true },
     },
-    // Vendedor de sala que tomó el pedido (relay etapa 1). Atribución de primera clase
-    // para "mis ventas"/incentivos, además del actor en status_history.
-    seller: {
-      id: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null, index: true },
-      nombre: { type: String, default: null, trim: true },
-    },
-    // Asignación MANUAL de picking (admin/manager): este pedido debe prepararlo una
-    // persona específica (características especiales). null = cola FIFO normal por
-    // segmento (chicos/grandes). Aditivo: no afecta pedidos existentes.
+    // Asignación MANUAL de la preparación (admin/manager): este pedido debe
+    // prepararlo una persona específica. null = cola común.
     assigned_to: {
       type: new mongoose.Schema(
         {
@@ -108,9 +95,8 @@ const orderSchema = new mongoose.Schema(
       ),
       default: null,
     },
-    // Picking/packing (relay etapa 3): avance del pickeo persistido (sobrevive recargas
-    // y permite que otro bodeguero continúe), faltantes detectados en el estante, y
-    // cierre de empaque (nº de bultos + peso).
+    // Preparación: avance persistido (sobrevive recargas y permite que otra persona
+    // continúe), faltantes detectados en el estante y cierre de empaque (bultos + peso).
     pick_progress: { type: [String], default: [] }, // product_ids confirmados (pickeados)
     pick_scanned: { type: [String], default: [] },  // subset confirmado por ESCÁNER
     faltantes: {
@@ -128,16 +114,6 @@ const orderSchema = new mongoose.Schema(
     packing: {
       bultos: { type: Number, default: null, min: 0 },
       peso: { type: Number, default: null, min: 0 },
-    },
-    // Monitores por zona: sectores cuyo "dueño de área" ya dejó preparados sus
-    // ítems (zona lista). Aditivo; el estado por zona se deriva con zonaEstado().
-    zone_done: {
-      type: [new mongoose.Schema({
-        sector: { type: String, default: "", trim: true },
-        at: { type: Date, default: Date.now },
-        by_label: { type: String, default: "", trim: true },
-      }, { _id: false })],
-      default: [],
     },
     status: {
       type: String,
@@ -171,8 +147,6 @@ const orderSchema = new mongoose.Schema(
         enum: ["webpay", "transfer", "cash_on_pickup", "card", "credito"],
         default: "webpay",
       },
-      // Cajera que cobró el pedido (relay etapa 2). Permite cuadre por cajera.
-      cashier_id: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
       platform: {
         type: String,
         enum: ["ios", "android", "web", "native"],
@@ -188,8 +162,8 @@ const orderSchema = new mongoose.Schema(
       buy_order: { type: String, default: null },
       session_id: { type: String, default: null },
       amount: { type: Number, default: 0, min: 0 },
-      // Cuadre de caja (solo pago en efectivo al retirar): monto recibido en
-      // mano y vuelto entregado. null cuando no aplica / no se registró.
+      // Pago en efectivo (contra entrega / al retirar): monto recibido en mano y
+      // vuelto entregado. null cuando no aplica / no se registró.
       amount_received: { type: Number, default: null, min: 0 },
       change: { type: Number, default: null, min: 0 },
       authorization_code: { type: String, default: null },
@@ -246,9 +220,6 @@ const orderSchema = new mongoose.Schema(
     discount_amount: { type: Number, required: true, default: 0, min: 0 },
     total: { type: Number, required: true, default: 0, min: 0 },
     notes: { type: String, default: null, trim: true },
-    // Boleta impresa en Impresión central: persistente entre PCs (reemplaza el
-    // flag en localStorage). null = aún no impresa.
-    printed_at: { type: Date, default: null },
     paid_at: { type: Date, default: null },
     shipped_at: { type: Date, default: null },
     delivered_at: { type: Date, default: null },
@@ -306,7 +277,6 @@ orderSchema.index({ "payment.token": 1 });
 orderSchema.index({ "payment.buy_order": 1 });
 orderSchema.index({ "items.product_id": 1 });
 orderSchema.index({ status: 1, created_at: -1 });
-orderSchema.index({ "items.vendor.id": 1, status: 1, created_at: -1 });
 orderSchema.index({ "payment.status": 1, created_at: -1 });
 // Agenda de retiros en bodega: filtrar por método, fecha comprometida y estado.
 orderSchema.index({ delivery_method: 1, "pickup.committed_date": 1, status: 1 });

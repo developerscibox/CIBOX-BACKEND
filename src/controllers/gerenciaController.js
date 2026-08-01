@@ -4,8 +4,6 @@ import Order from "../models/Order.js";
 import Product from "../models/Product.js";
 import StockMovement from "../models/StockMovement.js";
 import { ORDER_STATUS, PAID_STATUSES, MOVEMENT_TYPES } from "../utils/constants.js";
-import { DEFAULT_PILOTO, rankingPiloto } from "../incentivos/piloto.js";
-import { premioPorTiempo } from "../incentivos/tiempo.js";
 
 // Centro de mando del gerente: un solo endpoint que agrega métricas REALES del
 // negocio para un rango. Sin datos sintéticos: lo que no hay, viene en 0/[].
@@ -35,7 +33,7 @@ export const getGerencia = asyncHandler(async (req, res) => {
   const prevEnd = new Date(start.getTime() - 1);
   const paidMatch = (s, e) => ({ status: { $in: PAID_STATUSES }, created_at: { $gte: s, $lte: e } });
 
-  const [ventasAgg, prevAgg, prodAgg, deliveredDocs, colaAgg, cajaAgg, quiebres, comprasAgg, vendAgg, pagosAgg] = await Promise.all([
+  const [ventasAgg, prevAgg, prodAgg, deliveredDocs, colaAgg, cobrosAgg, quiebres, comprasAgg, pagosAgg] = await Promise.all([
     // Ventas del periodo: totales + serie por día + por hora
     Order.aggregate([
       { $match: paidMatch(start, end) },
@@ -67,15 +65,15 @@ export const getGerencia = asyncHandler(async (req, res) => {
       { $addFields: { cost: { $ifNull: [{ $arrayElemAt: ["$p.cost_price", 0] }, 0] } } },
       { $project: { name: 1, qty: 1, revenue: 1, costo: { $multiply: ["$cost", "$qty"] }, utilidad: { $subtract: ["$revenue", { $multiply: ["$cost", "$qty"] }] } } },
     ]),
-    // Entregados en el rango → tiempos por etapa + desempeño por persona
+    // Entregados en el rango → tiempos por etapa del pedido
     Order.find({ status: ORDER_STATUS.DELIVERED, delivered_at: mongoose.trusted({ $gte: start, $lte: end }) })
-      .select("total created_at delivered_at status_history items codigo_escaneo seller").lean(),
+      .select("total created_at delivered_at status_history items").lean(),
     // Cola actual (en vivo)
     Order.aggregate([
       { $match: { status: { $in: ["pending", "paid", "preparing", "ready"] } } },
       { $group: { _id: "$status", n: { $sum: 1 } } },
     ]),
-    // Caja: efectivo/otros del periodo por método
+    // Cobros del periodo por método de pago
     Order.aggregate([
       { $match: paidMatch(start, end) },
       { $group: { _id: "$payment.method", total: { $sum: "$total" }, count: { $sum: 1 } } },
@@ -88,21 +86,6 @@ export const getGerencia = asyncHandler(async (req, res) => {
       { $lookup: { from: "products", localField: "product_id", foreignField: "_id", as: "p" } },
       { $addFields: { cost: { $ifNull: [{ $arrayElemAt: ["$p.cost_price", 0] }, 0] } } },
       { $group: { _id: null, compras: { $sum: { $multiply: ["$quantity", "$cost"] } }, unidades: { $sum: "$quantity" } } },
-    ]),
-    // Vendedores: atribución de primera clase por Order.seller sobre pagados del
-    // periodo (mismo criterio que mis-metricas). Los pedidos web (sin seller.id)
-    // quedan fuera del ranking — no crean vendedores fantasma "cliente/invitado".
-    Order.aggregate([
-      { $match: { ...paidMatch(start, end), "seller.id": { $ne: null } } },
-      {
-        $group: {
-          _id: "$seller.id",
-          label: { $first: "$seller.nombre" },
-          pedidos: { $sum: 1 },
-          monto: { $sum: "$total" },
-          unidades: { $sum: { $sum: "$items.quantity" } },
-        },
-      },
     ]),
     // Ingresos por método de pago: pagados del periodo por paid_at (cobro real)
     Order.aggregate([
@@ -140,43 +123,34 @@ export const getGerencia = asyncHandler(async (req, res) => {
     distintos: prods.length,
   };
 
-  // ── Operación + Equipo (de los entregados) ──
-  const D = { espera_cobro: [], espera_cola: [], preparacion: [], espera_retiro: [], total: [] };
-  const caje = {}, bode = {};
+  // ── Operación (de los entregados) ──
+  const D = { espera_pago: [], espera_cola: [], preparacion: [], espera_entrega: [], total: [] };
+  const prepPorPersona = {};
   for (const o of deliveredDocs) {
-    // Solo pedidos de sala (relay) para los tiempos: un pedido web (sin boleta ni
-    // vendedor) puede tardar días en pagarse y revienta los promedios.
-    const esSala = Boolean(o.codigo_escaneo || o.seller?.id);
     const created = new Date(o.created_at).getTime();
     const paid = firstTs(o.status_history, "paid");
     const prep = firstTs(o.status_history, "preparing");
     const ready = firstTs(o.status_history, "ready");
     const del = firstTs(o.status_history, "delivered") || new Date(o.delivered_at).getTime();
-    const push = (arr, v) => { if (esSala && v != null) arr.push(v); };
-    const ec = mins(created, paid);
-    push(D.espera_cobro, ec);
+    const push = (arr, v) => { if (v != null) arr.push(v); };
+    push(D.espera_pago, mins(created, paid));
     push(D.espera_cola, mins(paid, prep));
     push(D.preparacion, mins(prep, ready));
-    push(D.espera_retiro, mins(ready, del));
+    push(D.espera_entrega, mins(ready, del));
     push(D.total, mins(created, del));
-    const c = actorOf(o.status_history, "paid");
-    if (c) { caje[c] = caje[c] || { label: c, cobros: 0, monto: 0, _t: [] }; caje[c].cobros++; caje[c].monto += o.total || 0; if (esSala && ec != null) caje[c]._t.push(ec); }
     const b = actorOf(o.status_history, "preparing");
     const pm = mins(prep, ready);
     if (b) {
-      bode[b] = bode[b] || { label: b, preparados: 0, _t: [], premio: 0 };
-      bode[b].preparados++;
-      if (pm != null) bode[b]._t.push(pm);
-      // Incentivo por tiempo de preparación (tramos en incentivos/tiempo.js).
-      const pr = premioPorTiempo({ total: o.total, n_sku: (o.items || []).length, prep_min: pm });
-      if (pr?.premio) bode[b].premio += pr.premio;
+      prepPorPersona[b] = prepPorPersona[b] || { label: b, preparados: 0, _t: [] };
+      prepPorPersona[b].preparados++;
+      if (pm != null) prepPorPersona[b]._t.push(pm);
     }
   }
   const tiempos = {
-    espera_cobro: r0(avg(D.espera_cobro)), espera_cola: r0(avg(D.espera_cola)),
-    preparacion: r0(avg(D.preparacion)), espera_retiro: r0(avg(D.espera_retiro)), total: r0(avg(D.total)),
+    espera_pago: r0(avg(D.espera_pago)), espera_cola: r0(avg(D.espera_cola)),
+    preparacion: r0(avg(D.preparacion)), espera_entrega: r0(avg(D.espera_entrega)), total: r0(avg(D.total)),
   };
-  const ETAPAS = { espera_cobro: "Espera + cobro", espera_cola: "Espera en cola", preparacion: "Preparación", espera_retiro: "Espera de retiro" };
+  const ETAPAS = { espera_pago: "Espera de pago", espera_cola: "Espera en cola", preparacion: "Preparación", espera_entrega: "Espera de entrega" };
   const cuelloE = Object.entries(ETAPAS).map(([k, l]) => [l, tiempos[k]]).sort((a, b) => b[1] - a[1])[0];
   const cola = { pending: 0, paid: 0, preparing: 0, ready: 0 };
   colaAgg.forEach((x) => { cola[x._id] = x.n; });
@@ -187,34 +161,23 @@ export const getGerencia = asyncHandler(async (req, res) => {
     throughput_hora: Math.round((deliveredDocs.length / horas) * 10) / 10,
   };
   const equipo = {
-    vendedores: vendAgg
-      .map((x) => ({ label: x.label || "Vendedor", pedidos: x.pedidos, monto: r0(x.monto), unidades: x.unidades || 0, ticket: x.pedidos ? r0(x.monto / x.pedidos) : 0 }))
-      .sort((a, b) => b.monto - a.monto),
-    cajeras: Object.values(caje).map((x) => ({ label: x.label, cobros: x.cobros, monto: r0(x.monto), t_cobro_prom: r0(avg(x._t || [])) })).sort((a, b) => b.monto - a.monto),
-    bodegueros: Object.values(bode).map((x) => ({ label: x.label, preparados: x.preparados, prep_prom_min: r0(avg(x._t)), premio_tiempo: r0(x.premio || 0) })).sort((a, b) => a.prep_prom_min - b.prep_prom_min),
+    preparacion: Object.values(prepPorPersona)
+      .map((x) => ({ label: x.label, preparados: x.preparados, prep_prom_min: r0(avg(x._t)) }))
+      .sort((a, b) => a.prep_prom_min - b.prep_prom_min),
   };
 
-  // ── Caja ──
+  // ── Cobros por método de pago ──
   const NORM = { cash_on_pickup: "efectivo", transfer: "transferencia", card: "tarjeta" };
   const byMethod = {};
-  let cajaTotal = 0;
-  cajaAgg.forEach((x) => { const k = NORM[x._id] || x._id || "otro"; byMethod[k] = (byMethod[k] || 0) + r0(x.total); cajaTotal += r0(x.total); });
-  const caja = { total: cajaTotal, byMethod, count: cajaAgg.reduce((a, x) => a + x.count, 0) };
+  let cobrosTotal = 0;
+  cobrosAgg.forEach((x) => { const k = NORM[x._id] || x._id || "otro"; byMethod[k] = (byMethod[k] || 0) + r0(x.total); cobrosTotal += r0(x.total); });
+  const cobros = { total: cobrosTotal, byMethod, count: cobrosAgg.reduce((a, x) => a + x.count, 0) };
 
   // ── Stock ──
   const disp = (p) => Math.max(0, (p.stock || 0) - (p.reserved || 0) - (p.allocated || 0));
   const quiebre = quiebres.filter((p) => disp(p) <= 0).map((p) => ({ product_id: String(p._id), name: p.name, stock: disp(p) }));
   const bajos = quiebres.filter((p) => disp(p) > 0 && disp(p) <= 10).map((p) => ({ product_id: String(p._id), name: p.name, stock: disp(p) })).sort((a, b) => a.stock - b.stock);
   const inventario = { quiebres: quiebre.slice(0, 20), quiebresCount: quiebre.length, bajos: bajos.slice(0, 20), bajosCount: bajos.length, activos: quiebres.length };
-
-  // ── Incentivos piloto (puntos por unidades + plata), trazable desde los pedidos ──
-  const incentivos = {
-    config: DEFAULT_PILOTO,
-    ranking: rankingPiloto(
-      equipo.vendedores.map((v) => ({ label: v.label, pedidos: v.pedidos, unidades: v.unidades || 0, monto: v.monto })),
-      DEFAULT_PILOTO,
-    ),
-  };
 
   // ── Finanzas: estado de resultados del periodo (datos reales) ──
   const cogs = prods.reduce((a, p) => a + (p.costo || 0), 0);
@@ -224,14 +187,14 @@ export const getGerencia = asyncHandler(async (req, res) => {
   const por_metodo = { efectivo: 0, tarjeta: 0, transferencia: 0, webpay: 0 };
   pagosAgg.forEach((x) => { const k = NORM[x._id] || x._id || "otro"; por_metodo[k] = (por_metodo[k] || 0) + r0(x.total); });
   const finanzas = {
-    ingresos: { ventas: total, cobrado: cajaTotal, por_metodo },
+    ingresos: { ventas: total, cobrado: cobrosTotal, por_metodo },
     egresos: { cogs, compras },
     utilidadBruta,
     margenBrutoPct: total ? Math.round((utilidadBruta / total) * 100) : null,
     sinCosto: prods.filter((p) => !(p.costo > 0)).length,
   };
 
-  res.json({ success: true, data: { rango: { from, to }, ventas, operacion, equipo, productos, caja, inventario, incentivos, finanzas } });
+  res.json({ success: true, data: { rango: { from, to }, ventas, operacion, equipo, productos, cobros, inventario, finanzas } });
 });
 
 export default { getGerencia };

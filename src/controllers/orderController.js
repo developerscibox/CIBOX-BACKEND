@@ -26,7 +26,6 @@ import {
   deleteOrder as svcDeleteOrder,
   transitionOrderStatus as svcTransitionOrderStatus,
   payCash as svcPayCash,
-  cashSummary as svcCashSummary,
   attachTransferReceipt as svcAttachTransferReceipt,
   findOrderForOwner,
   verifyGuestOrderAccess,
@@ -34,7 +33,6 @@ import {
 import {
   retryPayment as svcRetryPayment,
 } from "../services/paymentService.js";
-import { zonaEstado, marcarZonaLista } from "../services/relayOrderService.js";
 import { sendPushToUser } from "../services/pushService.js";
 import { uploadImage as svcUploadImage } from "../services/uploadService.js";
 import { ROLES, PERMISSIONS, roleHasPermission, canRoleTransition } from "../utils/constants.js";
@@ -434,7 +432,7 @@ export const adminListOrders = asyncHandler(async (req, res) => {
       // select:false por schema). status_history/delivery_method/pickup/customer
       // van explícitos por contrato del WMS.
       .select(
-        "status status_history delivery_method pickup customer seller assigned_to packing needs_review created_at total payment shipping items source coupon subtotal shipping_amount discount_amount notes printed_at user_id guest_id updated_at",
+        "status status_history delivery_method pickup customer assigned_to packing needs_review created_at total payment shipping items source coupon subtotal shipping_amount discount_amount notes user_id guest_id updated_at",
       )
       .lean(),
     Order.countDocuments(filter),
@@ -501,53 +499,6 @@ export const ordersBoard = asyncHandler(async (req, res) => {
       ready: orders.filter((o) => o.status === "ready").map(fmt),
     },
   });
-});
-
-/**
- * Monitor PÚBLICO por zona (dueño de área, sin login).
- * GET /orders/zone-board?sector=X → { sector, pedidos:[...] } con SOLO los ítems
- * del sector. CERO PII: folio corto, sin cliente, sin _id completo, sin precios.
- */
-export const zoneBoard = asyncHandler(async (req, res) => {
-  const sector = String(req.query.sector || "").trim();
-  if (!sector) throw new BadRequestError("Falta el sector (?sector=)");
-
-  const orders = await Order.find({
-    status: mongoose.trusted({ $in: ["paid", "preparing"] }),
-    "items.sector": sector,
-  })
-    .select("status created_at items zone_done pick_progress status_history")
-    .sort({ created_at: 1 }) // FIFO: el más antiguo primero
-    .limit(20)
-    .lean();
-
-  const pedidos = orders.map((o) => {
-    const prep = (o.status_history || []).find((h) => h.status === "preparing");
-    return {
-      folio: String(o._id).slice(-6).toUpperCase(),
-      status: o.status,
-      created_at: o.created_at,
-      tomado_por: prep?.changed_by?.label || null,
-      zona_lista: zonaEstado(o, sector) === "lista",
-      items: (o.items || [])
-        .filter((it) => String(it.sector || "").trim() === sector)
-        .map((it) => ({ name: it.name, cantidad: it.quantity || 0, cajas: it.cajas ?? null })),
-    };
-  });
-
-  res.json({ success: true, data: { sector, pedidos } });
-});
-
-/**
- * POST /orders/zone/:id/lista { sector } — el dueño de área marca su zona lista
- * (PÚBLICO, monitor). :id acepta _id completo o folio corto de 6 hex. Idempotente.
- */
-export const zonaListaHandler = asyncHandler(async (req, res) => {
-  const data = await marcarZonaLista({
-    orderIdOrFolio: req.params.id,
-    sector: req.body?.sector,
-  });
-  res.json({ success: true, data });
 });
 
 /**
@@ -682,25 +633,6 @@ export const adminPickupCalendar = asyncHandler(async (req, res) => {
 });
 
 /**
- * Consolidado del efectivo cobrado en un día (default hoy, America/Santiago).
- * GET /orders/admin/cash-summary?date=YYYY-MM-DD
- * → { date, total_cobrado, count, by_cashier: [{ label, count, total }] }
- */
-export const adminCashSummary = asyncHandler(async (req, res) => {
-  if (!roleHasPermission(req.user?.role, PERMISSIONS.ORDERS_READ))
-    throw new ForbiddenError("Permiso insuficiente");
-
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || ""))
-    ? req.query.date
-    : santiagoTodayYMD();
-
-  const range = santiagoDayRange(date);
-  const summary = await svcCashSummary({ range, ymd: date });
-
-  return res.json({ success: true, data: summary });
-});
-
-/**
  * Marca pagada EN EFECTIVO una orden cash_on_pickup registrando el monto
  * recibido y el vuelto. POST /orders/admin/:id/pay-cash { amount_received }.
  * Gate por permiso (cajero: orders.deliver) en la ruta.
@@ -714,39 +646,12 @@ export const adminPayCash = asyncHandler(async (req, res) => {
   const order = await svcPayCash({
     orderId: id,
     amountReceived,
-    by: buildActor(req.user, "caja"),
+    by: buildActor(req.user, "operaciones"),
   });
 
   return res.status(200).json({ success: true, data: sanitizeOrder(order) });
 });
 
-/**
- * PATCH /orders/admin/:id/printed — marca la boleta como impresa (Impresión
- * central). Idempotente: la primera llamada fija printed_at=now; las siguientes
- * devuelven el timestamp original. Gate ORDERS_PAY en la ruta.
- */
-export const adminMarkPrinted = asyncHandler(async (req, res) => {
-  const updated = await Order.findOneAndUpdate(
-    { _id: req.params.id, printed_at: null },
-    { $set: { printed_at: new Date() } },
-    { new: true },
-  )
-    .select("printed_at")
-    .lean();
-
-  if (updated) {
-    return res
-      .status(200)
-      .json({ success: true, data: { printed_at: updated.printed_at } });
-  }
-
-  // Ya estaba impresa (idempotente) o no existe (404).
-  const existing = await Order.findById(req.params.id).select("printed_at").lean();
-  if (!existing) throw new NotFoundError("Orden no encontrada");
-  return res
-    .status(200)
-    .json({ success: true, data: { printed_at: existing.printed_at } });
-});
 
 export const adminCancelOrder = asyncHandler(async (req, res) => {
   if (!roleHasPermission(req.user?.role, PERMISSIONS.ORDERS_CANCEL))

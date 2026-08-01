@@ -316,9 +316,6 @@ const rebuildItemsFromCart = async ({ cart, user, session }) => {
       discount_source: pricing.discount_source,
       subtotal: pricing.subtotal,
       original_subtotal: pricing.original_subtotal,
-      // Sector físico (snapshot) — agrupa vale/checklist y monitor por zona,
-      // igual que en relayOrderService (pedidos de sala).
-      sector: product.location?.sector || "",
       product_type: isBox ? "box" : "simple",
       box_items: boxItemsData,
       weight: product.weight || { value: 0, unit: "g" },
@@ -379,8 +376,6 @@ const rebuildItemsFromCustomBox = async ({ rawItems, user, session }) => {
       discount_source: pricing.discount_source,
       subtotal: pricing.subtotal,
       original_subtotal: pricing.original_subtotal,
-      // Sector físico (snapshot) — mismo criterio que rebuildItemsFromCart.
-      sector: product.location?.sector || "",
       weight: product.weight || { value: 0, unit: "g" },
       dimensions: product.dimensions || {
         length: 0,
@@ -890,9 +885,6 @@ export const markAsPaid = async ({
 
     order.status = ORDER_STATUS.PAID;
     order.payment.status = PAYMENT_STATUS.APPROVED;
-    // Atribución de caja: mi-día/cuadre filtran por cashier_id. Los webhooks
-    // llaman sin "by" → no tocar (ni pisar lo que ya fijó cobrarPedido).
-    if (by?.user_id) order.payment.cashier_id = by.user_id;
     order.paid_at = new Date();
     appendHistory(order, ORDER_STATUS.PAID, {
       note: cashNote || note || "Pago confirmado por admin",
@@ -948,12 +940,10 @@ export const collectCashAtPickup = async ({ orderId, amountReceived, by = null }
     order.payment.amount_received = received;
     order.payment.change = received - total;
     order.payment.status = PAYMENT_STATUS.APPROVED;
-    // Atribución de caja: quién cobró el efectivo al retiro (mi-día/cuadre).
-    if (by?.user_id) order.payment.cashier_id = by.user_id;
     order.paid_at = new Date();
     appendHistory(order, order.status, {
-      note: `Efectivo cobrado al retiro: recibido $${received}, vuelto $${received - total}`,
-      by: by || { label: "caja" },
+      note: `Pago en efectivo registrado: recibido $${received}, vuelto $${received - total}`,
+      by: by || { label: "operaciones" },
     });
     await order.save({ session });
     logger.info(
@@ -1004,55 +994,6 @@ export const attachTransferReceipt = async ({ orderId, receiptUrl }) => {
     "comprobante de transferencia adjuntado",
   );
   return order;
-};
-
-/**
- * Consolidado del efectivo cobrado en un día (America/Santiago).
- * Cuenta órdenes con payment.method=cash_on_pickup, payment.status=approved y
- * paid_at dentro del día. Desglosa por cajero usando la entrada PAID del
- * status_history (changed_by.label / role).
- * Devuelve { date, total_cobrado, count, by_cashier: [{label, count, total}] }.
- */
-export const cashSummary = async ({ range, ymd }) => {
-  const orders = await Order.find({
-    "payment.method": "cash_on_pickup",
-    "payment.status": PAYMENT_STATUS.APPROVED,
-    paid_at: mongoose.trusted({ $gte: range.start, $lt: range.end }),
-  })
-    .select("total payment.amount_received status_history paid_at")
-    .lean();
-
-  let total_cobrado = 0;
-  const byCashier = new Map();
-
-  for (const o of orders) {
-    const amount = Number(o.total || 0);
-    total_cobrado += amount;
-
-    // Cajero = quien dejó la entrada PAID en el historial (última, por si hay
-    // reintentos). Fallback a "—" si no hay atribución.
-    const paidEntry = [...(o.status_history || [])]
-      .reverse()
-      .find((h) => h.status === ORDER_STATUS.PAID);
-    const label =
-      paidEntry?.changed_by?.label ||
-      paidEntry?.changed_by?.role ||
-      "—";
-
-    const cur = byCashier.get(label) || { label, count: 0, total: 0 };
-    cur.count += 1;
-    cur.total += amount;
-    byCashier.set(label, cur);
-  }
-
-  const by_cashier = [...byCashier.values()].sort((a, b) => b.total - a.total);
-
-  return {
-    date: ymd,
-    total_cobrado,
-    count: orders.length,
-    by_cashier,
-  };
 };
 
 /**

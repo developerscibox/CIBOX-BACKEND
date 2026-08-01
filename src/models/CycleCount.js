@@ -32,8 +32,8 @@ const cycleCountLineSchema = new mongoose.Schema(
 const cycleCountSchema = new mongoose.Schema(
   {
     scope: {
-      type: { type: String, enum: ["sector", "category", "all"], required: true },
-      value: { type: String, default: "", trim: true }, // sector/categoría; "" para all
+      type: { type: String, enum: ["category", "all"], required: true },
+      value: { type: String, default: "", trim: true }, // categoría; "" para all
       label: { type: String, default: "", trim: true }, // texto legible para la UI
     },
     status: {

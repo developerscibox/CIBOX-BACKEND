@@ -57,24 +57,18 @@ export const MOVEMENT_TYPES = {
 
 export const ROLES = {
   CUSTOMER: "customer",
-  VENDOR: "vendor",     // legado: vendedor de marketplace (entidad Vendor), no es el de sala.
+  VENDOR: "vendor",     // legado: vendedor del marketplace (entidad Vendor).
   ADMIN: "admin",
-  // Roles operativos del panel de bodega (WMS) — relay de sala de 4 etapas.
+  // Roles operativos del panel de Cibox (100% online: nadie atiende público).
   MANAGER: "manager",   // Gerente / dueño: ve todo, aprueba, reportes (acceso total).
-  VENDEDOR: "vendedor", // Vendedor de sala: toma el pedido (móvil) → POR_PAGAR + boleta.
-  CASHIER: "cashier",   // Cajera: escanea la boleta, cobra (POR_PAGAR→PAGADO) y entrega.
-  OPERATOR: "operator", // Bodeguero: recepción + picking (PAGADO→EN_PREPARACION→LISTO).
-  PANTALLA: "pantalla", // Kiosko solo-lectura: turnos y retiro.
+  OPERATOR: "operator", // Operaciones: recepción, inventario y preparación de pedidos.
 };
 
-// Roles con acceso al panel de bodega (WMS).
+// Roles con acceso al panel de operaciones.
 export const WMS_ROLES = [
   ROLES.ADMIN,
   ROLES.MANAGER,
-  ROLES.VENDEDOR,
-  ROLES.CASHIER,
   ROLES.OPERATOR,
-  ROLES.PANTALLA,
 ];
 
 /**
@@ -82,11 +76,10 @@ export const WMS_ROLES = [
  * entero, para poder combinar capacidades sin crear un rol por cada excepción.
  */
 export const PERMISSIONS = {
-  ORDERS_READ: "orders.read",         // ver pedidos / dashboard de bodega
-  ORDERS_TAKE: "orders.take",         // vendedor: crea el pedido presencial (→POR_PAGAR)
-  ORDERS_PAY: "orders.pay",           // cajera: cobra el pedido (pending→paid)
-  ORDERS_PREPARE: "orders.prepare",   // paid→preparing, preparing→ready (picking)
-  ORDERS_DELIVER: "orders.deliver",   // ready→delivered (retiro en mostrador)
+  ORDERS_READ: "orders.read",         // ver pedidos / dashboard de operaciones
+  ORDERS_PAY: "orders.pay",           // confirmar el pago de un pedido (pending→paid)
+  ORDERS_PREPARE: "orders.prepare",   // paid→preparing, preparing→ready (preparación)
+  ORDERS_DELIVER: "orders.deliver",   // ready→shipped→delivered (despacho y entrega)
   ORDERS_CANCEL: "orders.cancel",     // cancelar pedido
   INVENTORY_READ: "inventory.read",   // kardex, low-stock, by-barcode
   INVENTORY_ADJUST: "inventory.adjust", // ajuste de stock con motivo
@@ -99,14 +92,13 @@ const ALL_PERMISSIONS = Object.values(PERMISSIONS);
 
 /**
  * Mapa rol → permisos por defecto (principio de mínimo privilegio).
- * admin = superusuario (todos). El gerente ve y aprueba todo el día a día,
- * el operario prepara y ajusta, el cajero solo entrega.
+ * admin = superusuario (todos). El gerente ve y aprueba todo el día a día;
+ * operaciones prepara, despacha y mueve inventario.
  */
 export const ROLE_PERMISSIONS = {
   [ROLES.ADMIN]: ALL_PERMISSIONS,
   [ROLES.MANAGER]: [
     PERMISSIONS.ORDERS_READ,
-    PERMISSIONS.ORDERS_TAKE,
     PERMISSIONS.ORDERS_PAY,
     PERMISSIONS.ORDERS_PREPARE,
     PERMISSIONS.ORDERS_DELIVER,
@@ -117,27 +109,15 @@ export const ROLE_PERMISSIONS = {
     PERMISSIONS.REPORTS_READ,
     PERMISSIONS.USERS_MANAGE,
   ],
-  // Vendedor de sala: ve su cola/catálogo (con stock) y toma el pedido. No cobra ni prepara.
-  [ROLES.VENDEDOR]: [
-    PERMISSIONS.ORDERS_READ,
-    PERMISSIONS.ORDERS_TAKE,
-    PERMISSIONS.INVENTORY_READ,
-  ],
-  // Cajera: cobra (pending→paid) y entrega en retiro (ready→delivered).
-  [ROLES.CASHIER]: [
-    PERMISSIONS.ORDERS_READ,
-    PERMISSIONS.ORDERS_PAY,
-    PERMISSIONS.ORDERS_DELIVER,
-  ],
-  // Bodeguero: picking (paid→preparing→ready) + recepción/ajuste de stock.
+  // Operaciones: prepara (paid→preparing→ready), despacha (→shipped/delivered)
+  // y mueve inventario (recepción/ajuste).
   [ROLES.OPERATOR]: [
     PERMISSIONS.ORDERS_READ,
     PERMISSIONS.ORDERS_PREPARE,
+    PERMISSIONS.ORDERS_DELIVER,
     PERMISSIONS.INVENTORY_READ,
     PERMISSIONS.INVENTORY_ADJUST,
   ],
-  // Kiosko solo-lectura.
-  [ROLES.PANTALLA]: [PERMISSIONS.ORDERS_READ],
   [ROLES.VENDOR]: [],
   [ROLES.CUSTOMER]: [],
 };
@@ -148,9 +128,8 @@ export const roleHasPermission = (role, permission) =>
   role === ROLES.ADMIN || permissionsForRole(role).includes(permission);
 
 /**
- * Matriz explícita estado-destino → permiso requerido para la transición del
- * relay de sala. Reemplaza el chequeo disperso por rol: un rol puede llevar un
- * pedido a `toStatus` solo si tiene el permiso mapeado aquí.
+ * Matriz explícita estado-destino → permiso requerido para la transición. Un rol
+ * puede llevar un pedido a `toStatus` solo si tiene el permiso mapeado aquí.
  */
 export const TRANSITION_PERMISSION = {
   [ORDER_STATUS.PAID]: PERMISSIONS.ORDERS_PAY,

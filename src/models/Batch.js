@@ -27,7 +27,6 @@ const batchSchema = new mongoose.Schema(
     unit_cost: { type: Number, default: 0, min: 0 }, // costo de compra de ESTE lote
     expiry_date: { type: Date, default: null },
     location: {
-      sector: { type: String, default: "", trim: true },
       zone: { type: String, default: "", trim: true },
       rack: { type: String, default: "", trim: true },
       level: { type: String, default: "", trim: true },

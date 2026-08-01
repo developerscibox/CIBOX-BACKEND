@@ -3,13 +3,12 @@ import { asyncHandler } from "../middlewares/errorHandler.js";
 import Order from "../models/Order.js";
 import Product from "../models/Product.js";
 import StockMovement from "../models/StockMovement.js";
-import CajaSession from "../models/CajaSession.js";
 import { PAID_STATUSES, MOVEMENT_TYPES } from "../utils/constants.js";
 
 // Biblioteca de informes (estilo Defontana N1): kardex valorizado, valorización
 // de inventario, rotación/cobertura, ranking de ventas, márgenes, libro de
-// ventas y cuadres de caja. Todo derivado de datos REALES (Order, Product,
-// StockMovement, CajaSession) — lo que no hay viene en 0/[].
+// ventas e inventario. Todo derivado de datos REALES (Order, Product,
+// StockMovement) — lo que no hay viene en 0/[].
 // Gate: requirePermission(REPORTS_READ) a nivel de ruta.
 
 const TZ = "America/Santiago"; // agrupaciones por día/mes en hora chilena, no UTC
@@ -127,7 +126,7 @@ export const kardexValorizado = asyncHandler(async (req, res) => {
 /**
  * GET /api/reports/valorizacion
  * Valorización del inventario actual: stock × costo (valor costo) y
- * stock × precio venta mínimo (valor venta), por categoría y por sector.
+ * stock × precio venta mínimo (valor venta), por categoría.
  */
 export const valorizacion = asyncHandler(async (req, res) => {
   const base = {
@@ -176,9 +175,6 @@ export const valorizacion = asyncHandler(async (req, res) => {
     {
       $facet: {
         por_categoria: groupOn({ $ifNull: ["$category.name", "Sin categoría"] }),
-        por_sector: groupOn({
-          $cond: [{ $eq: [{ $ifNull: ["$location.sector", ""] }, ""] }, "Sin sector", "$location.sector"],
-        }),
         totales: [
           {
             $group: {
@@ -211,7 +207,6 @@ export const valorizacion = asyncHandler(async (req, res) => {
         skus_sin_costo: t.skus_sin_costo || 0,
       },
       por_categoria: result?.por_categoria || [],
-      por_sector: result?.por_sector || [],
     },
   });
 });
@@ -233,7 +228,7 @@ export const rotacion = asyncHandler(async (req, res) => {
       { $group: { _id: "$product_id", vendidas: { $sum: { $abs: "$quantity" } } } },
     ]),
     Product.find({ is_active: true })
-      .select("name sku stock category.name location.sector")
+      .select("name sku stock category.name")
       .lean(),
   ]);
 
@@ -251,7 +246,6 @@ export const rotacion = asyncHandler(async (req, res) => {
         producto: p.name,
         sku: p.sku || "",
         categoria: p.category?.name || "Sin categoría",
-        sector: p.location?.sector || "",
         stock,
         vendidas,
         venta_prom_dia: Math.round(ventaPromDia * 100) / 100,
@@ -283,7 +277,7 @@ export const rotacion = asyncHandler(async (req, res) => {
 });
 
 /**
- * GET /api/reports/ranking?by=vendedor|producto|cliente&from&to&limit=20
+ * GET /api/reports/ranking?by=producto|cliente&from&to&limit=20
  * Ranking de ventas sobre pedidos pagados (PAID_STATUSES) del rango.
  */
 export const ranking = asyncHandler(async (req, res) => {
@@ -293,23 +287,7 @@ export const ranking = asyncHandler(async (req, res) => {
   const paidMatch = { status: { $in: PAID_STATUSES }, created_at: { $gte: from, $lte: to } };
 
   let agg;
-  if (by === "vendedor") {
-    // Solo pedidos de sala con atribución (seller.id) — los web quedan fuera.
-    agg = await Order.aggregate([
-      { $match: { ...paidMatch, "seller.id": { $ne: null } } },
-      {
-        $group: {
-          _id: "$seller.id",
-          label: { $first: "$seller.nombre" },
-          total: { $sum: "$total" },
-          pedidos: { $sum: 1 },
-          unidades: { $sum: { $sum: "$items.quantity" } },
-        },
-      },
-      { $sort: { total: -1 } },
-      { $limit: limit },
-    ]);
-  } else if (by === "cliente") {
+  if (by === "cliente") {
     // Clave: user_id si existe; si no, el nombre del cliente presencial.
     agg = await Order.aggregate([
       { $match: paidMatch },
@@ -507,44 +485,3 @@ export const libroVentas = asyncHandler(async (req, res) => {
   });
 });
 
-/**
- * GET /api/reports/cuadres?limit=30
- * Historial de cuadres de caja: sesiones cerradas, más recientes primero.
- */
-export const cuadres = asyncHandler(async (req, res) => {
-  const limit = Math.min(100, Number(req.query.limit) || 30);
-
-  const sessions = await CajaSession.find({ estado: "cerrada" })
-    .sort({ t_cierre: -1 })
-    .limit(limit)
-    .lean();
-
-  const items = sessions.map((s) => {
-    const diferencia = r0(s.diferencia);
-    return {
-      id: String(s._id),
-      fecha: s.t_cierre,
-      apertura: s.created_at,
-      cajera: s.cajera_label || "—",
-      monto_inicial: r0(s.monto_inicial),
-      ventas_efectivo: r0(s.ventas_efectivo),
-      esperado: r0(s.monto_esperado),
-      contado: s.monto_contado != null ? r0(s.monto_contado) : null,
-      diferencia,
-      estado: diferencia === 0 ? "cuadrada" : diferencia > 0 ? "sobrante" : "faltante",
-    };
-  });
-
-  const resumen = items.reduce(
-    (a, i) => ({
-      sesiones: a.sesiones + 1,
-      cuadradas: a.cuadradas + (i.estado === "cuadrada" ? 1 : 0),
-      sobrantes: a.sobrantes + (i.estado === "sobrante" ? 1 : 0),
-      faltantes: a.faltantes + (i.estado === "faltante" ? 1 : 0),
-      diferencia_total: a.diferencia_total + i.diferencia,
-    }),
-    { sesiones: 0, cuadradas: 0, sobrantes: 0, faltantes: 0, diferencia_total: 0 },
-  );
-
-  return res.json({ success: true, data: { items, resumen } });
-});

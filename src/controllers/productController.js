@@ -1185,7 +1185,6 @@ export const getProductFicha = asyncHandler(async (req, res) => {
         nombre: product.name,
         categoria: product.category?.name || "",
         imagen: product.thumbnail || product.images?.[0] || null,
-        sector: product.location?.sector || "",
         is_active: product.is_active !== false,
         precio_compra,
         precio_venta,

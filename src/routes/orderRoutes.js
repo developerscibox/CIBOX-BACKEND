@@ -21,16 +21,12 @@ import {
   adminListOrders,
   adminPickupSummary,
   adminPickupCalendar,
-  adminCashSummary,
   adminPayCash,
   attachTransferReceipt,
   getTransferInfo,
   ordersBoard,
   ordersStream,
-  zoneBoard,
-  zonaListaHandler,
   adminDeleteOrder,
-  adminMarkPrinted,
 } from "../controllers/orderController.js";
 import {
   createFromCartSchema,
@@ -43,11 +39,7 @@ import {
   adminPayCashSchema,
   transferReceiptSchema,
 } from "../validators/orderValidators.js";
-import { createManualOrderHandler } from "../controllers/manualOrderController.js";
-import { manualOrderSchema } from "../validators/manualOrderValidators.js";
-import { takeOrderHandler, findOrderByScanHandler, cobrarHandler, aceptarHandler, asignarHandler, pickersHandler, pickerConfigHandler, pickerFaceHandler, misMetricasHandler, misPedidosHandler, pickHandler, faltanteHandler, listoHandler } from "../controllers/relayOrderController.js";
-import { totemIdentificar, totemIdentificarFacial, totemTablero, totemTomar, totemFinalizar } from "../controllers/totemController.js";
-import { takeOrderSchema, cobrarSchema } from "../validators/relayOrderValidators.js";
+import { aceptarHandler, asignarHandler, pickersHandler, pickHandler, faltanteHandler, listoHandler } from "../controllers/preparationController.js";
 
 
 const router = Router();
@@ -75,23 +67,6 @@ router.get("/board", boardLimiter, ordersBoard);
 // (mitiga inundación de conexiones); no afecta la duración de una conexión ya abierta.
 router.get("/stream", boardLimiter, ordersStream);
 
-// Monitor por ZONA (dueño de área, sin login): cola de SU sector y marcar
-// "zona lista". PÚBLICAS con boardLimiter; antes de las rutas /:id genéricas.
-router.get("/zone-board", boardLimiter, zoneBoard);
-router.post("/zone/:id/lista", boardLimiter, zonaListaHandler);
-
-// TÓTEM de picking (kiosko del bodeguero): identificación por PIN + tomar/finalizar.
-// PÚBLICO como los otros kioskos; el PIN autoriza al picker. identificar/tomar/finalizar
-// con limiter estricto (anti fuerza bruta de PIN); tablero se pollea → boardLimiter.
-router.post("/totem/identificar", guestOrderLimiter, totemIdentificar);
-// Identificación por RECONOCIMIENTO FACIAL: el navegador manda el descriptor (128
-// floats de face-api.js) y el backend devuelve al picker + su pin para reutilizar el
-// flujo existente. Público con guestOrderLimiter (igual que /identificar).
-router.post("/totem/identificar-facial", guestOrderLimiter, totemIdentificarFacial);
-router.post("/totem/tablero", boardLimiter, totemTablero);
-router.post("/totem/tomar", guestOrderLimiter, totemTomar);
-router.post("/totem/finalizar", guestOrderLimiter, totemFinalizar);
-
 // Datos bancarios para transferencia (PÚBLICO): la tienda los muestra al
 // confirmar la compra y en el detalle del pedido. Solo expone BANK_TRANSFER_INFO.
 router.get("/transfer-info", boardLimiter, getTransferInfo);
@@ -102,71 +77,19 @@ router.get("/transfer-info", boardLimiter, getTransferInfo);
 // rol se valida en el controller (operario: preparing/ready; cajero: delivered).
 router.get("/admin", protect, requirePermission(PERMISSIONS.ORDERS_READ), adminListOrders);
 
-// Venta manual (presencial): crea una orden que NO pasó por la app, descuenta
-// stock y escribe kardex. admin/manager/operator (orders.prepare).
-router.post(
-  "/admin/manual",
-  protect,
-  requirePermission(PERMISSIONS.ORDERS_PREPARE),
-  validate(manualOrderSchema),
-  createManualOrderHandler,
-);
-
-// Relay de sala — etapa 1: el vendedor toma el pedido (→POR_PAGAR + boleta).
-router.post(
-  "/admin/take",
-  protect,
-  requirePermission(PERMISSIONS.ORDERS_TAKE),
-  validate(takeOrderSchema),
-  takeOrderHandler,
-);
-
-// Perfil del vendedor: SUS métricas e historial (filtrado por su propio user_id).
-router.get("/admin/mis-metricas", protect, requirePermission(PERMISSIONS.ORDERS_TAKE), misMetricasHandler);
-router.get("/admin/mis-pedidos", protect, requirePermission(PERMISSIONS.ORDERS_TAKE), misPedidosHandler);
-
-// Relay de sala — etapa 2: la cajera escanea la boleta para traer el pedido.
-router.get(
-  "/admin/by-scan/:codigo",
-  protect,
-  requirePermission(PERMISSIONS.ORDERS_PAY),
-  findOrderByScanHandler,
-);
-
-// Relay de sala — etapa 2: la cajera cobra → PAGADO → cola de picking.
-router.post(
-  "/admin/:id/cobrar",
-  protect,
-  requirePermission(PERMISSIONS.ORDERS_PAY),
-  validate(cobrarSchema),
-  cobrarHandler,
-);
-
-// Impresión central: persiste que la boleta ya se imprimió (printed_at,
-// idempotente) — reemplaza el flag en localStorage por-PC.
-router.patch(
-  "/admin/:id/printed",
-  protect,
-  requirePermission(PERMISSIONS.ORDERS_PAY),
-  adminMarkPrinted,
-);
-
-// Relay de sala — etapa 3: el bodeguero acepta el pedido (claim atómico) → EN_PREPARACION.
-// El servicio aplica FIFO por segmento (chicos/grandes) + asignación manual antes del claim.
+// Preparación: se toma el pedido pagado (claim atómico) → EN PREPARACIÓN.
+// El servicio respeta la asignación manual (assigned_to) antes del claim.
 router.post(
   "/admin/:id/aceptar",
   protect,
   requirePermission(PERMISSIONS.ORDERS_PREPARE),
   aceptarHandler,
 );
-// Asignación manual de picking (súper-admin): selector de pickers + fijar/limpiar
+// Asignación manual de la preparación: selector de personas + fijar/limpiar
 // assigned_to. Perm users.manage (admin/manager).
 router.get("/admin/pickers", protect, requirePermission(PERMISSIONS.USERS_MANAGE), pickersHandler);
-router.post("/admin/pickers/:id/config", protect, requirePermission(PERMISSIONS.USERS_MANAGE), pickerConfigHandler);
-// Registro/baja del rostro del picker para el tótem (descriptores biométricos).
-router.post("/admin/pickers/:id/face", protect, requirePermission(PERMISSIONS.USERS_MANAGE), pickerFaceHandler);
 router.post("/admin/:id/asignar", protect, requirePermission(PERMISSIONS.USERS_MANAGE), asignarHandler);
-// Picking etapa 3: avance persistido, faltante/dañado y cierre de empaque (→ready).
+// Preparación: avance persistido, faltante/dañado y cierre de empaque (→ready).
 router.patch("/admin/:id/pick", protect, requirePermission(PERMISSIONS.ORDERS_PREPARE), pickHandler);
 router.post("/admin/:id/faltante", protect, requirePermission(PERMISSIONS.ORDERS_PREPARE), faltanteHandler);
 router.post("/admin/:id/listo", protect, requirePermission(PERMISSIONS.ORDERS_PREPARE), listoHandler);
@@ -185,17 +108,8 @@ router.get(
   adminPickupCalendar,
 );
 
-// Consolidado del efectivo cobrado en el día (cuadre de caja). orders.read.
-router.get(
-  "/admin/cash-summary",
-  protect,
-  requirePermission(PERMISSIONS.ORDERS_READ),
-  adminCashSummary,
-);
-
-// Marcar pagada EN EFECTIVO con monto recibido y vuelto. El cajero (orders.deliver)
-// cobra en mostrador; operario/gerente/admin también pueden. El estado destino
-// (pending→paid) y el cuadre se validan en el servicio.
+// Registrar el pago de un pedido contra entrega / transferencia confirmada, con
+// monto recibido y vuelto. El estado destino (pending→paid) lo valida el servicio.
 router.post(
   "/admin/:id/pay-cash",
   protect,
