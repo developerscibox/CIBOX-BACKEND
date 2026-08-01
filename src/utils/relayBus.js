@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 
 // Bus de eventos de operación para empujar cambios en vivo por SSE
-// (pantallas de retiro/turnos, cola de picking). Aditivo: si algo falla, nunca
+// (cola de preparación, tablero de pedidos). Aditivo: si algo falla, nunca
 // rompe la transacción que lo emite (try/catch).
 export const relayBus = new EventEmitter();
 relayBus.setMaxListeners(100);
