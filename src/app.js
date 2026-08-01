@@ -41,6 +41,7 @@ import clientesRoutes from "./routes/clientesRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import contentRoutes, { configRouter } from "./routes/contentRoutes.js";
 import priceApprovalRoutes from "./routes/priceApprovalRoutes.js";
+import integracionesRoutes from "./routes/integracionesRoutes.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -104,6 +105,8 @@ app.use("/api/price-approvals", priceApprovalRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/content", contentRoutes);
 app.use("/api/config", configRouter);
+// Puerto de integración con software externo (seguimiento de pedidos).
+app.use("/api/integraciones", integracionesRoutes);
 
 app.get("/success", (req, res) => {
   const orderId = String(req.query.orderId || "");

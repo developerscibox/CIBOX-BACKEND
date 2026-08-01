@@ -1437,6 +1437,23 @@ export const transitionOrderStatus = async ({
     "transición de orden aplicada",
   );
   emitRelayChange({ type: "status", id: String(order._id), status: newStatus });
+
+  // Integración externa (Fase 6): al quedar empacado, el pedido se registra en
+  // el software de seguimiento. Import dinámico para no crear un ciclo
+  // (seguimientoExternoService importa transitionOrderStatus de este archivo).
+  // BEST-EFFORT: un proveedor caído no puede frenar la bodega.
+  if (newStatus === ORDER_STATUS.READY && order.delivery_method !== "pickup") {
+    try {
+      const { enviarPedidoASeguimiento } = await import("./seguimientoExternoService.js");
+      await enviarPedidoASeguimiento(order._id);
+    } catch (err) {
+      logger.warn(
+        { orderId: String(order._id), err: err.message },
+        "seguimiento externo: no se pudo enviar el pedido (se puede reenviar desde el panel)",
+      );
+    }
+  }
+
   return order;
 };
 

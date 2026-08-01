@@ -69,6 +69,17 @@ const envSchema = z.object({
   FRONTEND_URL: z.string().default("http://localhost:5173"),
   MOBILE_DEEP_LINK: z.string().default("myapp://"),
 
+  // ── Seguimiento externo (Fase 6) ───────────────────────────────────────────
+  // Proveedor de seguimiento de pedidos. "log" (default) = adapter falso que
+  // solo registra en log; no llama a ninguna API. Cuando Cibox elija el
+  // proveedor real, se escribe su adapter y se setea aquí su nombre.
+  TRACKING_PROVIDER: z.string().default("log"),
+  TRACKING_API_URL: z.string().default(""),
+  TRACKING_API_KEY: z.string().default(""),
+  TRACKING_ACCOUNT_ID: z.string().default(""),
+  // Secreto compartido para validar la firma del webhook del proveedor.
+  TRACKING_WEBHOOK_SECRET: z.string().default(""),
+
   BLUEEXPRESS_API_URL: z.string().default(""),
   BLUEEXPRESS_API_KEY: z.string().default(""),
   BLUEEXPRESS_ACCOUNT: z.string().default(""),
@@ -131,6 +142,15 @@ if (parsed.data.SII_ENABLED) {
   const faltan = ["SII_RUT_EMPRESA", "SII_CERT_PATH", "SII_CERT_PASSWORD"].filter((k) => !parsed.data[k]);
   if (faltan.length) {
     console.warn(`⚠️  SII_ENABLED=true pero faltan ${faltan.join(", ")} — la emisión real no funcionará (documentos en stub).`);
+  }
+}
+if (parsed.data.TRACKING_PROVIDER && parsed.data.TRACKING_PROVIDER !== "log") {
+  const faltan = ["TRACKING_API_URL", "TRACKING_API_KEY"].filter((k) => !parsed.data[k]);
+  if (faltan.length) {
+    console.warn(`⚠️  TRACKING_PROVIDER=${parsed.data.TRACKING_PROVIDER} pero faltan ${faltan.join(", ")} — el seguimiento externo fallará.`);
+  }
+  if (!parsed.data.TRACKING_WEBHOOK_SECRET) {
+    console.warn("⚠️  TRACKING_WEBHOOK_SECRET vacío: el webhook de seguimiento no podrá validar firmas.");
   }
 }
 if (parsed.data.EMAIL_HOST && (!parsed.data.EMAIL_USER || !parsed.data.EMAIL_PASS)) {

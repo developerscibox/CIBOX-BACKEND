@@ -233,6 +233,31 @@ const orderSchema = new mongoose.Schema(
     // Acumulado de reembolsos parciales aprobados (refundService.approveRefund).
     // Sin este campo, el set se descartaba en silencio por el strict mode de Mongoose.
     partial_refunded_amount: { type: Number, default: 0, min: 0 },
+    // ── Seguimiento en el software externo (Fase 6) ─────────────────────────
+    // Referencia del pedido EN EL PROVEEDOR y los eventos que este informa. Es
+    // información paralela: el estado que manda sigue siendo `status`, movido
+    // solo por transiciones válidas de la máquina de estados.
+    external_tracking: {
+      proveedor: { type: String, default: null, trim: true },
+      ref_externa: { type: String, default: null, trim: true, index: true, sparse: true },
+      estado: { type: String, default: null, trim: true },
+      url_seguimiento: { type: String, default: null },
+      enviado_at: { type: Date, default: null },
+      ultimo_evento_at: { type: Date, default: null },
+      eventos: {
+        type: [
+          new mongoose.Schema(
+            {
+              estado: { type: String, default: "" },
+              at: { type: Date, default: Date.now },
+              detalle: { type: String, default: null },
+            },
+            { _id: false },
+          ),
+        ],
+        default: [],
+      },
+    },
     status_history: {
       type: [
         {
