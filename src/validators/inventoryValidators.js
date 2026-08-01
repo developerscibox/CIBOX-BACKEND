@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MOVEMENT_TYPES } from "../utils/constants.js";
+import { MOVEMENT_TYPES, MANUAL_MOVEMENT_TYPES } from "../utils/constants.js";
 
 const objectId = z.string().regex(/^[a-fA-F0-9]{24}$/, "ID inválido");
 
@@ -23,6 +23,9 @@ export const adjustStockSchema = {
       .int()
       .refine((v) => v !== 0, "delta debe ser distinto de 0"),
     reason: z.string().min(3).max(300),
+    // Tipo del movimiento. Sin él se infiere por el signo (entrada / ajuste);
+    // la merma siempre se declara para que el informe no dependa del texto.
+    type: z.enum(MANUAL_MOVEMENT_TYPES).optional(),
   }),
 };
 

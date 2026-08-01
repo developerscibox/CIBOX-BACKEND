@@ -134,16 +134,16 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
     // Lotes open (qty_remaining > 0 por hook de status) con vencimiento ≤ 7 días,
     // incluye ya vencidos — mismo criterio FEFO que /inventory/lotes/expiring.
     Batch.countDocuments({ status: "open", expiry_date: mongoose.trusted({ $ne: null, $lte: v7 }) }),
-    // Merma del mes: ajustes NEGATIVOS del kardex cuyo motivo menciona "merma"
-    // (la merma no tiene tipo propio: es MOVEMENT_TYPES.ADJUSTMENT con motivo libre).
-    // Valorizada a cost_price y, si el producto no tiene costo, a pricing.min_price.
+    // Merma del mes: movimientos de tipo MERMA (tipo propio del kardex desde la
+    // Fase 4; antes se adivinaba por el texto del motivo, que se perdía si
+    // alguien escribía "rotura" o "vencido"). Valorizada a cost_price y, si el
+    // producto no tiene costo, a pricing.min_price.
     StockMovement.aggregate([
       {
         $match: {
-          type: MOVEMENT_TYPES.ADJUSTMENT,
+          type: MOVEMENT_TYPES.MERMA,
           quantity: { $lt: 0 },
           created_at: { $gte: mes0, $lte: hoy1 },
-          reason: { $regex: "merma", $options: "i" },
         },
       },
       { $lookup: { from: "products", localField: "product_id", foreignField: "_id", as: "p" } },
@@ -407,7 +407,7 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
     catAgg[x.categoria].rev += x.revenue;
     catAgg[x.categoria].cost += x.costo;
   });
-  const mermaMes = r0(mermaAgg[0]?.total); // 0 si no hubo ajustes con motivo "merma"
+  const mermaMes = r0(mermaAgg[0]?.total); // 0 si no hubo mermas en el mes
   const rentabilidad = {
     margenBruto: r0(margenBruto),
     margenPct: totalMes ? Math.round((margenBruto / totalMes) * 100) : null,

@@ -1,4 +1,5 @@
 import { asyncHandler } from "../middlewares/errorHandler.js";
+import { resumenAlertas } from "../inventario/alertas.js";
 import { NotFoundError, ForbiddenError } from "../utils/errors.js";
 import { PERMISSIONS, roleHasPermission } from "../utils/constants.js";
 import Product from "../models/Product.js";
@@ -59,12 +60,13 @@ export const getMovements = asyncHandler(async (req, res) => {
  * body: { product_id, delta, reason }
  */
 export const postAdjustStock = asyncHandler(async (req, res) => {
-  const { product_id, delta, reason } = req.body;
+  const { product_id, delta, reason, type } = req.body;
 
   const product = await adjustStock({
     productId: product_id,
     delta,
     reason,
+    type,
     by: {
       user_id: req.user?.id || null,
       role: req.user?.role || null,
@@ -115,7 +117,9 @@ export const getLowStock = asyncHandler(async (req, res) => {
     threshold: req.query.threshold,
     limit: req.query.limit,
   });
-  return res.json({ success: true, data: { items, count: items.length } });
+  // resumen: cuántos hay en quiebre / críticos / bajos, para el badge del panel.
+  const resumen = resumenAlertas(items, Number(req.query.threshold) || 10);
+  return res.json({ success: true, data: { items, count: items.length, resumen } });
 });
 
 /**

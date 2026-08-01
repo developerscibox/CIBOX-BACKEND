@@ -30,6 +30,7 @@ import { formatRut, isValidRut } from "../utils/rut.js";
 
 import { calculateItemPricing } from "./pricingService.js";
 import { allocateStockAtomic, commitPick, releaseAllocated, restoreStock, confirmReservation } from "./stockService.js";
+import { planDeDespacho } from "../inventario/pick.js";
 import {
   logOrderStockMovements,
   consumeBatchesFEFO,
@@ -1263,22 +1264,19 @@ export const commitOrderPick = async ({
     if (!order.stock_committed) {
       const stockAfterMap = new Map();
       const touchedProductIds = new Set();
-      // Faltantes reportados en picking YA descontaron su parte del físico
-      // (registrarFaltante → adjustStock). Aquí el pick descuenta SOLO lo realmente
-      // recogido (esperado − faltante) y libera el resto comprometido (allocated),
-      // para no descontar el físico dos veces.
-      const realPorProducto = new Map();
-      for (const f of order.faltantes || []) {
-        if (f?.product_id != null) realPorProducto.set(String(f.product_id), Number(f.qty_real || 0));
-      }
+      // Plan de despacho: cuánto sale del físico y cuánto solo se libera de lo
+      // reservado. Los faltantes reportados al preparar YA descontaron su parte
+      // del físico (registrarFaltante → adjustStock), así que descontarlos otra
+      // vez aquí bajaría el stock DOS VECES. Lógica pura en inventario/pick.js.
+      const plan = planDeDespacho(order.items, order.faltantes);
+      const planPorProducto = new Map(plan.map((p) => [p.product_id, p]));
       for (const item of order.items) {
         if (!item.product_id) continue;
-        const esperado = Number(item.quantity || 0);
         const pid = String(item.product_id);
-        const real = realPorProducto.has(pid)
-          ? Math.min(esperado, Math.max(0, realPorProducto.get(pid)))
-          : esperado;
-        const faltan = Math.max(0, esperado - real);
+        const { real, faltante: faltan } = planPorProducto.get(pid) || {
+          real: Number(item.quantity || 0),
+          faltante: 0,
+        };
         let updated = null;
         if (real > 0) {
           updated = await commitPick({ productId: item.product_id, quantity: real }, session);

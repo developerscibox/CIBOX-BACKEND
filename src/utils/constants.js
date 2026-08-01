@@ -47,13 +47,36 @@ export const PAYMENT_STATUS = {
  *   negativo = salida de bodega, positivo = entrada/reposición.
  */
 export const MOVEMENT_TYPES = {
-  SALE: "venta",            // descuento por orden creada
+  SALE: "venta",             // salida por despacho del pedido
   CANCELLATION: "anulacion", // reposición por cancelación
-  EXPIRY: "expiracion",     // reposición por orden pendiente expirada
-  REFUND: "reembolso",      // reposición por reembolso aprobado
-  ADJUSTMENT: "ajuste",     // ajuste manual (merma, conteo, corrección)
-  RECEIVING: "recepcion",   // entrada de mercadería
+  EXPIRY: "expiracion",      // reposición por pedido pendiente expirado
+  REFUND: "reembolso",       // reposición por reembolso aprobado
+  ADJUSTMENT: "ajuste",      // corrección de inventario (conteo, error de carga)
+  MERMA: "merma",            // pérdida real: roto, vencido, robado
+  RECEIVING: "recepcion",    // entrada de mercadería
 };
+
+/**
+ * Familia de cada movimiento — las cuatro que pide el negocio: entrada, salida,
+ * ajuste y merma. El tipo dice POR QUÉ se movió el stock; la familia, en qué
+ * columna del informe cae.
+ */
+export const MOVEMENT_FAMILY = {
+  [MOVEMENT_TYPES.RECEIVING]: "entrada",
+  [MOVEMENT_TYPES.CANCELLATION]: "entrada",
+  [MOVEMENT_TYPES.EXPIRY]: "entrada",
+  [MOVEMENT_TYPES.REFUND]: "entrada",
+  [MOVEMENT_TYPES.SALE]: "salida",
+  [MOVEMENT_TYPES.ADJUSTMENT]: "ajuste",
+  [MOVEMENT_TYPES.MERMA]: "merma",
+};
+
+/** Tipos que puede elegir una persona al mover stock a mano (panel → Ajustes). */
+export const MANUAL_MOVEMENT_TYPES = [
+  MOVEMENT_TYPES.RECEIVING,
+  MOVEMENT_TYPES.ADJUSTMENT,
+  MOVEMENT_TYPES.MERMA,
+];
 
 export const ROLES = {
   CUSTOMER: "customer",

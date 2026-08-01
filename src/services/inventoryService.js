@@ -2,8 +2,9 @@ import mongoose from "mongoose";
 import Product from "../models/Product.js";
 import StockMovement from "../models/StockMovement.js";
 import Batch from "../models/Batch.js";
-import { MOVEMENT_TYPES } from "../utils/constants.js";
+import { MOVEMENT_TYPES, MANUAL_MOVEMENT_TYPES } from "../utils/constants.js";
 import { getBoxQty } from "./pricingService.js";
+import { disponibleDe, nivelDeStock, esAlerta, GRAVEDAD, resumenAlertas } from "../inventario/alertas.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../utils/errors.js";
 import { logger } from "../utils/logger.js";
 
@@ -249,13 +250,28 @@ export const listExpiringBatches = async ({ days = 60 } = {}) => {
  * Atómico: para deltas negativos exige stock suficiente.
  * Siempre deja huella en el kardex con motivo y autor.
  */
-export const adjustStock = async ({ productId, delta, reason, by }) => {
+export const adjustStock = async ({ productId, delta, reason, by, type = null }) => {
   const qty = Number(delta);
   if (!Number.isInteger(qty) || qty === 0) {
     throw new BadRequestError("delta debe ser un entero distinto de 0");
   }
   if (!String(reason || "").trim()) {
     throw new BadRequestError("El motivo del ajuste es obligatorio");
+  }
+
+  // Tipo del movimiento. Si no viene, se infiere por el signo: entrada de
+  // mercadería si suma, corrección de inventario si resta. La MERMA (pérdida
+  // real: roto, vencido, robado) es siempre explícita y siempre negativa —
+  // así el informe de mermas no depende de adivinar por el texto del motivo.
+  const movementType = type || (qty > 0 ? MOVEMENT_TYPES.RECEIVING : MOVEMENT_TYPES.ADJUSTMENT);
+  if (!MANUAL_MOVEMENT_TYPES.includes(movementType)) {
+    throw new BadRequestError(`Tipo de movimiento manual inválido: ${movementType}`);
+  }
+  if (movementType === MOVEMENT_TYPES.MERMA && qty > 0) {
+    throw new BadRequestError("Una merma siempre resta stock");
+  }
+  if (movementType === MOVEMENT_TYPES.RECEIVING && qty < 0) {
+    throw new BadRequestError("Una entrada siempre suma stock");
   }
 
   const session = await mongoose.startSession();
@@ -283,7 +299,7 @@ export const adjustStock = async ({ productId, delta, reason, by }) => {
         {
           productId: updated._id,
           productName: updated.name,
-          type: qty > 0 ? MOVEMENT_TYPES.RECEIVING : MOVEMENT_TYPES.ADJUSTMENT,
+          type: movementType,
           quantity: qty,
           stockAfter: updated.stock,
           reason: String(reason).trim(),
@@ -292,7 +308,8 @@ export const adjustStock = async ({ productId, delta, reason, by }) => {
         session
       );
 
-      // Merma (delta<0): la salida sale del lote más próximo a vencer (FEFO),
+      // Salida negativa (merma o corrección): sale del lote más próximo a vencer
+      // (FEFO), best-effort.
       // best-effort. Conteo a favor (delta>0): NO se crea lote (corrección de
       // lote desconocido). El consumo de lotes nunca debe romper el ajuste.
       if (qty < 0) {
@@ -652,14 +669,33 @@ export const listReorder = async ({ limit } = {}) => {
  */
 export const listLowStock = async ({ threshold = 10, limit = 100 } = {}) => {
   const t = Math.max(0, Number(threshold) || 10);
-  return Product.find({
+  // Se busca por DISPONIBLE (físico − reservado − comprometido), no por físico:
+  // lo comprometido ya está vendido aunque siga en la estantería. Se trae
+  // también lo que está bajo su punto de reorden aunque supere el umbral.
+  const items = await Product.find({
     is_active: true,
-    stock: mongoose.trusted({ $lte: t }),
+    $or: [
+      { stock: mongoose.trusted({ $lte: t }) },
+      { $expr: { $lte: [{ $subtract: ["$stock", { $add: [{ $ifNull: ["$reserved", 0] }, { $ifNull: ["$allocated", 0] }] }] }, t] } },
+      { $expr: { $and: [
+        { $gt: [{ $ifNull: ["$min_stock", 0] }, 0] },
+        { $lte: [
+          { $subtract: ["$stock", { $add: [{ $ifNull: ["$reserved", 0] }, { $ifNull: ["$allocated", 0] }] }] },
+          { $ceil: { $multiply: [{ $ifNull: ["$min_stock", 0] }, 1.5] } },
+        ] },
+      ] } },
+    ],
   })
     .sort({ stock: 1 })
     .limit(Math.min(500, Number(limit) || 100))
     .select(
-      "name sku barcode stock location thumbnail vendor pricing.tiers pricing.min_price",
+      "name sku barcode stock reserved allocated min_stock target_stock location thumbnail vendor price sale_unit pricing.tiers pricing.min_price",
     )
     .lean();
+
+  // Nivel de alerta por producto + orden por gravedad (quiebre primero).
+  return items
+    .map((p) => ({ ...p, disponible: disponibleDe(p), nivel: nivelDeStock(p, t) }))
+    .filter((p) => esAlerta(p.nivel))
+    .sort((a, b) => (GRAVEDAD[a.nivel] - GRAVEDAD[b.nivel]) || (a.disponible - b.disponible));
 };
