@@ -41,7 +41,7 @@ const buildCartItem = ({ product, quantity, user }) => {
   if (!product.is_active) throw new ConflictError("Producto inactivo");
 
   const tiers = product?.pricing?.tiers || [];
-  // Bodega 12 vende SOLO por caja: normaliza a un múltiplo entero de la caja
+  // Cibox vende SOLO por caja: normaliza a un múltiplo entero de la caja
   // (mínimo 1 caja), independientemente de lo que pida el cliente.
   const boxQty = getBoxQty(tiers);
   const requestedQty = Number(quantity || 0);

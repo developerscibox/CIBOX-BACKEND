@@ -4,6 +4,7 @@ import helmet from "helmet";
 import compression from "compression";
 
 import { env } from "./config/env.js";
+import { brand } from "./config/brand.js";
 import { logger } from "./utils/logger.js";
 import { requestId } from "./middlewares/requestId.js";
 import { globalLimiter } from "./middlewares/rateLimiters.js";
@@ -65,7 +66,7 @@ app.use((req, res, next) => {
 
 app.use(globalLimiter);
 
-app.get("/", (req, res) => res.json({ name: "Cibox API", version: "2.0.0", status: "ok" }));
+app.get("/", (req, res) => res.json({ name: `${brand.name} API`, version: "2.0.0", status: "ok" }));
 app.get("/health", (req, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 app.get("/ready", (req, res) => res.json({ status: "ready" }));
 

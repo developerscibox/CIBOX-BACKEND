@@ -23,7 +23,7 @@ const getOrCreatePantry = async (userId) => {
 
 /**
  * Precio por CAJA = precio del tier de mayor min_qty (precio por unidad) × ese min_qty.
- * Bodega 12 vende solo por caja.
+ * Cibox vende solo por caja.
  */
 const computeBoxPrice = (tiers) => {
   if (!Array.isArray(tiers) || tiers.length === 0) return 0;

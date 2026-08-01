@@ -29,7 +29,7 @@ const cartItemSchema = new mongoose.Schema(
     unit_price: { type: Number, required: true, min: 0 },
     subtotal: { type: Number, required: true, min: 0 },
     tier_label: { type: String, default: null, trim: true },
-    // Unidades por caja (paso de cantidad). Bodega 12 vende solo por caja.
+    // Unidades por caja (paso de cantidad). Cibox vende solo por caja.
     box_qty: { type: Number, default: 1, min: 1 },
     product_type: {
       type: String,

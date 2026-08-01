@@ -3,7 +3,7 @@ import { env } from "../config/env.js";
 
 const PANTRY_DISCOUNT_PERCENT = env.PANTRY_DISCOUNT;
 const CIBOX_PLUS_DISCOUNT_PERCENT = env.CIBOX_PLUS_DISCOUNT;
-// Unidades por caja: min_qty del tier mayor. Bodega 12 vende solo por caja.
+// Unidades por caja: min_qty del tier mayor. Cibox vende solo por caja.
 export const getBoxQty = (tiers) => {
   if (!Array.isArray(tiers) || tiers.length === 0) return 1;
   const max = tiers.reduce((m, t) => Math.max(m, Number(t?.min_qty || 1)), 1);

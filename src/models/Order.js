@@ -133,11 +133,9 @@ const orderSchema = new mongoose.Schema(
     },
     pickup: {
       committed_date: { type: Date, default: null, index: true },
-      location: {
-        type: String,
-        default:
-          "Av. Lo Espejo 01565, Bodega 826, Centro Logístico Mersan, Lo Espejo",
-      },
+      // Snapshot de la dirección de retiro al crear el pedido. El default lo
+      // fija orderService desde config/brand.js (fuente de verdad de la marca).
+      location: { type: String, default: "" },
       picked_up_at: { type: Date, default: null },
     },
     payment: {

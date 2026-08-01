@@ -9,7 +9,7 @@ import {
 } from "../utils/refreshCookie.js";
 
 // ¿Exponer el refresh token en el body de la respuesta? En producción los clientes
-// WEB dependen EXCLUSIVAMENTE de la cookie httpOnly (b12_rt): el refresh token no
+// WEB dependen EXCLUSIVAMENTE de la cookie httpOnly (cibox_rt): el refresh token no
 // debe viajar por body porque un XSS podría leerlo/exfiltrarlo. Nativo (sin cookie
 // fiable) y dev (cookie cross-origin que no viaja) sí lo reciben por body.
 const exposeRefreshInBody = (req) =>

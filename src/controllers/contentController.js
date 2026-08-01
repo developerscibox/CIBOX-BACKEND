@@ -2,6 +2,7 @@ import { z } from "zod";
 import { asyncHandler } from "../middlewares/errorHandler.js";
 import { SiteContent } from "../models/SiteContent.js";
 import { env } from "../config/env.js";
+import { publicBrand } from "../config/brand.js";
 import { logger } from "../utils/logger.js";
 import { cacheGet, cacheSet, cacheKey, cacheClearPrefix } from "../utils/responseCache.js";
 
@@ -187,6 +188,14 @@ export const getModulesConfig = asyncHandler(async (req, res) => {
     success: true,
     data: { enabled: env.modulesEnabled },
   });
+});
+
+// GET /api/config/brand — identidad de Cibox (público). Fuente de verdad:
+// config/brand.js. Los frontends leen de aquí sus datos legales y de contacto
+// en vez de repetirlos en su código.
+export const getBrandConfig = asyncHandler(async (req, res) => {
+  res.set("Cache-Control", "public, max-age=300");
+  return res.status(200).json({ success: true, data: publicBrand() });
 });
 
 // ── PAUSA DE LA TIENDA ONLINE (interruptor del panel) ────────────────────────

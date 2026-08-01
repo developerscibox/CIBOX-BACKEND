@@ -10,7 +10,7 @@ import { env } from "../config/env.js";
 // En DEV (HTTP, cross-origin por puerto distinto) la cookie NO se envía en XHR
 // cross-origin → el flujo cae al refreshToken del body (fallback). Por eso el
 // backend lee cookie OR body, sin romper el desarrollo local.
-const COOKIE_NAME = "b12_rt";
+const COOKIE_NAME = "cibox_rt";
 const MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000; // 90 días
 
 const cookieOptions = () => ({

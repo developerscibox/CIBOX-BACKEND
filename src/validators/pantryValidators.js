@@ -26,7 +26,7 @@ export const pantryItemParamsSchema = z.object({
   productId: objectIdSchema,
 });
 
-// Bodega 12 es SOLO retiro en bodega: checkoutPantry solo arma el carrito desde
+// checkoutPantry solo arma el carrito desde
 // la despensa (el controlador no usa shipping). Por eso shipping es opcional;
 // la dirección/retiro se resuelve al crear la orden, no acá.
 export const checkoutPantrySchema = z.object({

@@ -5,13 +5,14 @@ import { TaxDocument } from "../models/TaxDocument.js";
 import { BadRequestError, NotFoundError } from "../utils/errors.js";
 import { isValidRut } from "../utils/rut.js";
 import mongoose from "mongoose";
+import { brand } from "../config/brand.js";
 const computeIvaBreakdown = (total) => {
   const t = Number(total || 0);
-  const neto = Math.round(t / 1.19);
+  // Los precios del catálogo van CON IVA incluido (brand.legal.precios_con_iva).
+  const neto = Math.round(t / (1 + brand.legal.iva_pct / 100));
   const iva = t - neto;
   return { neto, iva };
 };
-
 const buildStubFolio = () => {
   const ts = Date.now().toString(36);
   const rnd = crypto.randomBytes(3).toString("hex");

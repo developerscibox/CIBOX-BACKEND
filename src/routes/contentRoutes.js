@@ -9,6 +9,7 @@ import {
   putHomeContent,
   putHomeContentSchema,
   getModulesConfig,
+  getBrandConfig,
   getStoreStatus,
   putStoreStatus,
   putStoreStatusSchema,
@@ -43,5 +44,6 @@ router.put(
 // Router aparte para /api/config (switches de módulos comerciales).
 export const configRouter = Router();
 configRouter.get("/modules", boardLimiter, getModulesConfig);
+configRouter.get("/brand", boardLimiter, getBrandConfig);
 
 export default router;

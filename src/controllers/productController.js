@@ -426,7 +426,7 @@ const getVendorDisplayName = (vendor) =>
 
 // Roles del WMS que gestionan el catálogo sin tener un vendor propio asociado
 // (admin y gerente). Pueden indicar vendor.id explícito; si no, se asigna el
-// primer vendor activo de la plataforma (Bodega 12).
+// primer vendor activo de la plataforma.
 const CATALOG_MANAGER_ROLES = new Set([ROLES.ADMIN, ROLES.MANAGER]);
 
 const resolveVendorForRequest = async (req) => {
@@ -441,7 +441,7 @@ const resolveVendorForRequest = async (req) => {
       };
     }
 
-    // Sin vendor.id explícito: usar el primer vendor activo (Bodega 12).
+    // Sin vendor.id explícito: usar el primer vendor activo.
     const fallback = await Vendor.findOne({ is_active: true })
       .sort({ created_at: 1 })
       .lean();

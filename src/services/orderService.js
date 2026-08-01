@@ -57,6 +57,7 @@ import {
 } from "./couponService.js";
 import { quoteShippingForOrder } from "./shippingService.js";
 
+import { addressOneLine } from "../config/brand.js";
 /* ------------------------------ helpers ---------------------------------- */
 
 const normalizeEmail = (e) =>
@@ -77,9 +78,8 @@ const isValidEmailFormat = (e) =>
 
 const isValidPhoneCL = (p) => /^\+569\d{8}$/.test(normalizePhoneCL(p));
 
-// Dirección física de retiro en bodega (Bodega 12).
-const PICKUP_LOCATION =
-  "Av. Lo Espejo 01565, Bodega 826, Centro Logístico Mersan, Lo Espejo";
+// Dirección física de retiro. Fuente de verdad: config/brand.js.
+const PICKUP_LOCATION = addressOneLine();
 
 /**
  * Valida customer siempre y shipping solo cuando es retiro=delivery.

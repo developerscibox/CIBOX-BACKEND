@@ -355,7 +355,7 @@ export const receiveStock = async ({ supplier, doc_ref, items, expiry_date, by }
       let lineIdx = 0;
       for (const item of items) {
         lineIdx += 1;
-        // qty del API = CAJAS recibidas (Bodega 12 opera por caja). Se traduce a
+        // qty del API = CAJAS recibidas (Cibox opera por caja). Se traduce a
         // unidades con el tamaño de caja del producto, igual que la venta manual.
         const cajas = Number(item.qty);
         if (!Number.isInteger(cajas) || cajas <= 0) {
