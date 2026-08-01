@@ -84,7 +84,7 @@ export const brand = {
   colors: {
     primary: "#4E9B27",       // verde Cibox — botones y CTA
     primaryLight: "#C3E062",  // lima — fondos destacados
-    primaryDark: "#3B7A1D",   // verde profundo — énfasis, precios
+    primaryDark: "#3E7D1E",   // verde profundo — énfasis, precios
     accent: "#F7B81C",        // amarillo — badges de descuento
     primaryText: "#ffffff",
     background: "#f7f8f5",
@@ -95,7 +95,7 @@ export const brand = {
     ok: "#16794a",
     warn: "#d97706",
     danger: "#b00020",
-    gradient: "linear-gradient(120deg,#3B7A1D 0%,#4E9B27 55%,#C3E062 100%)",
+    gradient: "linear-gradient(120deg,#3E7D1E 0%,#4E9B27 50%,#C3E062 100%)",
   },
 };
 
