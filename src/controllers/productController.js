@@ -126,8 +126,16 @@ const buildCategoriesPayload = async (categoryIds) => {
 const VENDOR_UPDATE_FIELDS = new Set([
   "name",
   "description",
-  "pricing",
+  // Precio de venta y formato. `pricing` (los tramos) ya NO se edita a mano:
+  // el modelo lo deriva de estos campos.
+  "price",
+  "sale_unit",
+  "unit_content",
+  "pack_size",
+  "pack_price",
+  "tax",
   "category",
+  "subcategory",
   "categories",
   "category_ids",
   "images",
@@ -260,6 +268,7 @@ const buildProductFilters = (q) => {
       ],
     });
   }
+  if (q.subcategory) and.push({ "subcategory.id": q.subcategory });
   if (q.vendor) and.push({ "vendor.id": q.vendor });
   if (q.product_type) and.push({ product_type: q.product_type });
 
@@ -494,6 +503,8 @@ export const createProduct = asyncHandler(async (req, res) => {
     search_name,
     vendor,
     ...catPayload,          // category, categories, category_ids
+    // La subcategoría explícita del body manda sobre la derivada del árbol.
+    ...(req.body.subcategory ? { subcategory: req.body.subcategory } : {}),
   });
 
   bustProductsCache();
@@ -566,7 +577,7 @@ export const updateProduct = asyncHandler(async (req, res) => {
     { product_id: String(product._id), by: req.user.id },
     "product updated",
   );
-  const cambios = [update.pricing ? "precio" : null, update.cost_price !== undefined ? "costo" : null, update.name ? "nombre" : null].filter(Boolean).join(", ") || "datos";
+  const cambios = [update.price !== undefined ? "precio" : null, update.cost_price !== undefined ? "costo" : null, update.name ? "nombre" : null].filter(Boolean).join(", ") || "datos";
   logAudit({ req, action: "producto.editar", target: updated?.name || product.name, detail: `actualizó ${cambios}` });
   res.json({ success: true, data: updated, message: "Producto actualizado" });
 });
@@ -1222,16 +1233,20 @@ export const getProductFicha = asyncHandler(async (req, res) => {
 // Importación masiva de SKUs — POST /api/products/import-bulk
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Tiers de un producto nuevo: unidad + caja opcional (box_qty>=2 y box_price>0).
-const buildImportTiers = (row) => {
-  const tiers = [{ min_qty: 1, price: Number(row.price), label: "Unidad" }];
-  const boxQty = Number(row.box_qty);
-  const boxPrice = Number(row.box_price);
-  if (boxQty >= 2 && boxPrice > 0) {
-    tiers.push({ min_qty: boxQty, price: boxPrice, label: `Caja ${boxQty} un` });
-  }
-  return tiers;
-};
+// Formato de venta de una fila del CSV. pack_size/pack_price son los nombres
+// nuevos; box_qty/box_price se aceptan como alias por compatibilidad con las
+// plantillas antiguas. Los tramos de precio los deriva el modelo.
+const importSaleFormat = (row) => ({
+  price: Number(row.price),
+  sale_unit: row.sale_unit || "unidad",
+  unit_content: {
+    value: Number(row.content_value ?? 0),
+    unit: String(row.content_unit ?? "").trim(),
+  },
+  pack_size: Number(row.pack_size ?? row.box_qty ?? 0),
+  pack_price: Number(row.pack_price ?? row.box_price ?? 0),
+  tax: { afecto: row.iva_afecto !== false },
+});
 
 export const importBulkProducts = asyncHandler(async (req, res) => {
   const { rows, dry_run: dryRun = false } = req.body;
@@ -1342,36 +1357,22 @@ export const importBulkProducts = asyncHandler(async (req, res) => {
           if (row.sku) existing.sku = row.sku;
           if (row.barcode) existing.barcode = row.barcode;
 
-          // Precios: price reemplaza el tier unidad; box_qty>=2 + box_price>0
-          // reemplaza los tiers de caja. Sin datos de precio, no se tocan.
-          const hasBox = Number(row.box_qty) >= 2 && Number(row.box_price) > 0;
-          if (row.price !== undefined || hasBox) {
-            const current = Array.isArray(existing.pricing?.tiers)
-              ? existing.pricing.tiers.map((t) => ({
-                  min_qty: Number(t.min_qty),
-                  price: Number(t.price),
-                  label: t.label,
-                }))
-              : [];
-            const newTiers = [];
-            const currentUnit = current.find((t) => t.min_qty === 1);
-            if (row.price !== undefined) {
-              newTiers.push({ min_qty: 1, price: row.price, label: currentUnit?.label || "Unidad" });
-            } else if (currentUnit) {
-              newTiers.push(currentUnit);
-            }
-            if (hasBox) {
-              newTiers.push({
-                min_qty: Number(row.box_qty),
-                price: Number(row.box_price),
-                label: `Caja ${Number(row.box_qty)} un`,
-              });
-            } else {
-              newTiers.push(...current.filter((t) => t.min_qty > 1));
-            }
-            newTiers.sort((a, b) => a.min_qty - b.min_qty);
-            existing.pricing = existing.pricing || {};
-            existing.pricing.tiers = newTiers; // pre-save recalcula min_price
+          // Precio y formato de venta: solo lo que venga en la fila. Los tramos
+          // de precio los regenera el pre-save del modelo.
+          if (row.price !== undefined) existing.price = row.price;
+          if (row.sale_unit !== undefined) existing.sale_unit = row.sale_unit;
+          if (row.content_value !== undefined || row.content_unit !== undefined) {
+            existing.unit_content = {
+              value: Number(row.content_value ?? existing.unit_content?.value ?? 0),
+              unit: String(row.content_unit ?? existing.unit_content?.unit ?? ""),
+            };
+          }
+          const packSize = row.pack_size ?? row.box_qty;
+          const packPrice = row.pack_price ?? row.box_price;
+          if (packSize !== undefined) existing.pack_size = Number(packSize);
+          if (packPrice !== undefined) existing.pack_price = Number(packPrice);
+          if (row.iva_afecto !== undefined) {
+            existing.tax = { ...(existing.tax || {}), afecto: row.iva_afecto };
           }
 
           if (row.category_name) {
@@ -1383,6 +1384,12 @@ export const importBulkProducts = asyncHandler(async (req, res) => {
             } else {
               notas.push(`categoría "${row.category_name}" no existe: se mantiene la actual`);
             }
+          }
+
+          if (row.subcategory_name) {
+            const subPayload = await resolveImportCategory(row.subcategory_name);
+            if (subPayload) existing.subcategory = subPayload.category;
+            else notas.push(`subcategoría "${row.subcategory_name}" no existe: se mantiene la actual`);
           }
 
           if (row.stock_inicial !== undefined) {
@@ -1425,6 +1432,12 @@ export const importBulkProducts = asyncHandler(async (req, res) => {
         }
       }
 
+      let subPayload = null;
+      if (row.subcategory_name) {
+        subPayload = await resolveImportCategory(row.subcategory_name);
+        if (!subPayload) notas.push(`subcategoría "${row.subcategory_name}" no existe`);
+      }
+
       if (!row.description) notas.push("sin descripción: se usó el nombre");
 
       const stockInicial = Number(row.stock_inicial || 0);
@@ -1432,8 +1445,9 @@ export const importBulkProducts = asyncHandler(async (req, res) => {
         name: row.name,
         search_name: normalizeText(row.name),
         description: row.description || row.name,
-        pricing: { tiers: buildImportTiers(row) },
+        ...importSaleFormat(row),
         ...catPayload, // category, categories, category_ids
+        ...(subPayload ? { subcategory: subPayload.category } : {}),
         vendor,
         product_type: "simple",
         stock: stockInicial,

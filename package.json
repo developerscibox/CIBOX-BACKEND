@@ -15,7 +15,8 @@
       "migrate:wp-images": "node src/scripts/migrateWpImagesToCloudinary.js",
       "backfill:stock-committed": "node src/scripts/backfillStockCommitted.js",
       "migrate:categories": "node scripts/migrateProductCategories.js",
-      "migrate:search": "node scripts/migrateSearchNames.js"
+      "migrate:search": "node scripts/migrateSearchNames.js",
+      "migrate:catalogo": "node scripts/migrateCatalogoSupermercado.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.650.0",

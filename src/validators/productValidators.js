@@ -7,57 +7,32 @@ const objectIdSchema = z
     message: "ID inválido",
   });
 
-const tierSchema = z.object({
-  min_qty: z.number().int().positive(),
+// Los tramos de precio ya NO se envían: el modelo los deriva de `price` y
+// `pack_size` (ver models/Product.js). El catálogo de supermercado tiene un
+// precio por producto.
+
+const SALE_UNITS = ["unidad", "kg", "g", "l", "ml", "pack", "caja", "bandeja", "docena"];
+
+const priceFields = {
+  // Precio de venta al público CON IVA incluido.
   price: z.number().nonnegative(),
-  label: z.string().trim().min(1).max(100),
-});
-
-const tiersSchema = z
-  .array(tierSchema)
-  .min(1, "Debe existir al menos un tier")
-  .superRefine((tiers, ctx) => {
-    const minQtys = new Set();
-    const quantities = new Set();
-    for (let i = 0; i < tiers.length; i++) {
-      const t = tiers[i];
-      if (minQtys.has(t.min_qty)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [i, "min_qty"],
-          message: "min_qty duplicado",
-        });
-      }
-      minQtys.add(t.min_qty);
-      quantities.add(t.min_qty);
-    }
-    if (quantities.size !== tiers.length) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "No se permiten quantities iguales entre tiers",
-      });
-    }
-    for (let i = 1; i < tiers.length; i++) {
-      if (tiers[i].min_qty <= tiers[i - 1].min_qty) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [i, "min_qty"],
-          message: "min_qty debe ser ascendente entre tiers",
-        });
-      }
-      if (tiers[i].price >= tiers[i - 1].price) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [i, "price"],
-          message: "El precio debe ser descendente al subir min_qty",
-        });
-      }
-    }
-  });
-
-const pricingSchema = z.object({
-  tiers: tiersSchema,
-});
+  sale_unit: z.enum(SALE_UNITS).default("unidad"),
+  unit_content: z
+    .object({
+      value: z.number().nonnegative().optional(),
+      unit: z.string().trim().max(10).optional(),
+    })
+    .optional(),
+  // Venta por pack/caja: 0 o 1 = venta unitaria.
+  pack_size: z.number().int().nonnegative().optional(),
+  pack_price: z.number().nonnegative().optional(),
+  tax: z
+    .object({
+      afecto: z.boolean().optional(),
+      iva_pct: z.number().min(0).max(100).optional(),
+    })
+    .optional(),
+};
 
 const categorySchema = z.object({
   id: z.string().trim().min(1).max(100),
@@ -72,8 +47,9 @@ const vendorRefSchema = z.object({
 const baseCreate = {
   name: z.string().trim().min(2).max(200),
   description: z.string().trim().min(1).max(5000),
-  pricing: pricingSchema,
+  ...priceFields,
   category: categorySchema,
+  subcategory: categorySchema.optional(),
   images: z.array(z.string().trim().url()).max(20).default([]),
   thumbnail: z.string().trim().url().optional(),
   stock: z.number().int().nonnegative().default(0),
@@ -81,6 +57,7 @@ const baseCreate = {
   min_stock: z.number().int().nonnegative().optional(),
   target_stock: z.number().int().nonnegative().optional(),
   is_active: z.boolean().optional(),
+  // SKU del catálogo. Si no viene, el modelo genera uno.
   sku: z.string().trim().max(100).optional(),
   barcode: z.string().trim().max(64).optional(),
   brand: z.string().trim().max(100).optional(),
@@ -122,8 +99,14 @@ export const updateProductSchema = z
   .object({
     name: baseCreate.name.optional(),
     description: baseCreate.description.optional(),
-    pricing: pricingSchema.optional(),
+    price: baseCreate.price.optional(),
+    sale_unit: z.enum(SALE_UNITS).optional(),
+    unit_content: baseCreate.unit_content,
+    pack_size: baseCreate.pack_size,
+    pack_price: baseCreate.pack_price,
+    tax: baseCreate.tax,
     category: categorySchema.optional(),
+    subcategory: categorySchema.optional(),
     images: z.array(z.string().trim().url()).max(20).optional(),
     // "" permitido para QUITAR la foto desde el panel (el modelo defaultea "").
     thumbnail: z.union([z.string().trim().url(), z.literal("")]).optional(),
@@ -146,8 +129,14 @@ export const adminUpdateProductSchema = z
   .object({
     name: baseCreate.name.optional(),
     description: baseCreate.description.optional(),
-    pricing: pricingSchema.optional(),
+    price: baseCreate.price.optional(),
+    sale_unit: z.enum(SALE_UNITS).optional(),
+    unit_content: baseCreate.unit_content,
+    pack_size: baseCreate.pack_size,
+    pack_price: baseCreate.pack_price,
+    tax: baseCreate.tax,
     category: categorySchema.optional(),
+    subcategory: categorySchema.optional(),
     images: z.array(z.string().trim().url()).max(20).optional(),
     // "" permitido para QUITAR la foto desde el panel (el modelo defaultea "").
     thumbnail: z.union([z.string().trim().url(), z.literal("")]).optional(),
@@ -172,6 +161,7 @@ export const listProductsSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(500).default(20),
   category: z.string().trim().min(1).optional(),
+  subcategory: z.string().trim().min(1).optional(),
   vendor: z.string().trim().min(1).optional(),
   search: z.string().trim().min(1).max(200).optional(),
   min_price: z.preprocess(
@@ -248,9 +238,29 @@ export const importBulkRowSchema = z.object({
     z.string({ required_error: "falta name (obligatorio)" }).trim().min(2, "name muy corto").max(200),
   ),
   category_name: optionalString(200),
+  subcategory_name: optionalString(200),
   price: optionalNumber(z.coerce.number().positive("price debe ser > 0")),
+  sale_unit: z.preprocess(
+    (v) => (v === "" || v === null || v === undefined ? undefined : String(v).toLowerCase().trim()),
+    z.enum(SALE_UNITS, { errorMap: () => ({ message: `sale_unit debe ser uno de: ${SALE_UNITS.join(", ")}` }) }).optional(),
+  ),
+  content_value: optionalNumber(z.coerce.number().nonnegative()),
+  content_unit: optionalString(10),
+  // Compatibilidad: box_qty/box_price se aceptan como alias de pack_size/pack_price.
+  pack_size: optionalNumber(z.coerce.number().int().min(1)),
+  pack_price: optionalNumber(z.coerce.number().nonnegative()),
   box_qty: optionalNumber(z.coerce.number().int().min(1)),
   box_price: optionalNumber(z.coerce.number().nonnegative()),
+  iva_afecto: z.preprocess(
+    (v) => {
+      if (v === "" || v === null || v === undefined) return undefined;
+      const t = String(v).toLowerCase().trim();
+      if (["si", "sí", "true", "1", "s"].includes(t)) return true;
+      if (["no", "false", "0", "n"].includes(t)) return false;
+      return v;
+    },
+    z.boolean().optional(),
+  ),
   cost_price: optionalNumber(z.coerce.number().nonnegative()),
   stock_inicial: optionalNumber(z.coerce.number().int().nonnegative()),
   min_stock: optionalNumber(z.coerce.number().int().nonnegative()),
