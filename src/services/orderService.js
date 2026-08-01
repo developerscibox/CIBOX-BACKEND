@@ -15,6 +15,7 @@ import {
   PAID_STATUSES,
   PAYMENT_STATUS,
   VALID_TRANSITIONS,
+  puedeTransicionar,
   MOVEMENT_TYPES,
 } from "../utils/constants.js";
 import { withTransaction } from "../utils/transactions.js";
@@ -1242,7 +1243,8 @@ export const refundOrder = async ({
 };
 
 /**
- * Transición genérica de estado validada por VALID_TRANSITIONS.
+ * Transición genérica de estado, validada por la máquina de estados
+ * (pedidos/estados.js). Registra SIEMPRE quién y cuándo en status_history.
  */
 /**
  * Confirma el pick de una orden (preparing→ready): el físico SALE de bodega.
@@ -1361,21 +1363,20 @@ export const transitionOrderStatus = async ({
   if (!order) throw new NotFoundError("Orden no encontrada");
 
   const fromStatus = order.status;
-  const allowed = [...(VALID_TRANSITIONS[fromStatus] || [])];
-  // Efectivo al retirar (BOPIS): el operario prepara la orden ANTES de cobrar
-  // (el pago ocurre al entregar). Se permite pending→preparing solo para
-  // cash_on_pickup; webpay/transferencia siguen exigiendo el pago primero.
-  if (
+
+  // Pago contra entrega: el pedido se prepara ANTES de cobrarse (el pago ocurre
+  // al entregar). Es la única excepción a "primero el pago"; webpay y
+  // transferencia siguen exigiendo la confirmación antes de preparar.
+  const contraEntrega =
     fromStatus === ORDER_STATUS.PENDING &&
     newStatus === ORDER_STATUS.PREPARING &&
-    order.payment?.method === "cash_on_pickup"
-  ) {
-    allowed.push(ORDER_STATUS.PREPARING);
-  }
-  if (!allowed.includes(newStatus)) {
-    throw new ConflictError(
-      `Transición inválida: ${fromStatus} → ${newStatus}`,
-    );
+    order.payment?.method === "cash_on_pickup";
+
+  if (!contraEntrega) {
+    const check = puedeTransicionar(fromStatus, newStatus, {
+      deliveryMethod: order.delivery_method,
+    });
+    if (!check.ok) throw new ConflictError(check.motivo);
   }
 
   // Efectivo al retirar impago NO se entrega: sin este guard, ready→delivered

@@ -1,36 +1,21 @@
-export const ORDER_STATUS = {
-  PENDING: "pending",
-  PAID: "paid",
-  PREPARING: "preparing",
-  READY: "ready",        // preparado: picking terminado, listo para despacho
-  SHIPPED: "shipped",    // en ruta
-  DELIVERED: "delivered",
-  CANCELLED: "cancelled",
-  REFUNDED: "refunded",
-};
+/**
+ * Estados y transiciones del pedido. La definición vive en pedidos/estados.js
+ * (lógica pura, testeable); aquí solo se reexporta para no romper los imports
+ * existentes. NO declarar transiciones en este archivo.
+ */
+export {
+  ORDER_STATUS,
+  PAID_STATUSES,
+  TERMINAL_STATUSES,
+  VALID_TRANSITIONS,
+  puedeTransicionar,
+  siguientesEstados,
+  caminoDe,
+  lineaDeTiempo,
+  avancePct,
+} from "../pedidos/estados.js";
 
-export const PAID_STATUSES = [
-  ORDER_STATUS.PAID,
-  ORDER_STATUS.PREPARING,
-  ORDER_STATUS.READY,
-  ORDER_STATUS.SHIPPED,
-  ORDER_STATUS.DELIVERED,
-];
-
-export const VALID_TRANSITIONS = {
-  [ORDER_STATUS.PENDING]: [ORDER_STATUS.PAID, ORDER_STATUS.CANCELLED],
-  [ORDER_STATUS.PAID]: [ORDER_STATUS.PREPARING, ORDER_STATUS.CANCELLED, ORDER_STATUS.REFUNDED],
-  // "shipped" se mantiene alcanzable desde "preparing" por compatibilidad con
-  // órdenes/flujos antiguos; el flujo nuevo es preparing → ready → shipped
-  [ORDER_STATUS.PREPARING]: [ORDER_STATUS.READY, ORDER_STATUS.SHIPPED, ORDER_STATUS.CANCELLED],
-  // DELIVERED alcanzable desde READY para retiro en bodega: el cliente retira
-  // directamente desde "listo" (sin pasar por "shipped"/en ruta).
-  [ORDER_STATUS.READY]: [ORDER_STATUS.SHIPPED, ORDER_STATUS.DELIVERED, ORDER_STATUS.CANCELLED],
-  [ORDER_STATUS.SHIPPED]: [ORDER_STATUS.DELIVERED],
-  [ORDER_STATUS.DELIVERED]: [ORDER_STATUS.REFUNDED],
-  [ORDER_STATUS.CANCELLED]: [],
-  [ORDER_STATUS.REFUNDED]: [],
-};
+import { ORDER_STATUS } from "../pedidos/estados.js";
 
 export const PAYMENT_STATUS = {
   PENDING: "pending",

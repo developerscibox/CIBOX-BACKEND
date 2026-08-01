@@ -10,6 +10,7 @@ import {
 } from "../utils/errors.js";
 import { ORDER_STATUS, VALID_TRANSITIONS } from "../utils/constants.js";
 
+import { lineaDeTiempo, avancePct, CLIENT_COPY } from "../pedidos/estados.js";
 const getOrderModel = () => {
   if (!mongoose.models.Order) {
     throw new Error("Order model not registered");
@@ -34,15 +35,33 @@ const matchesGuestToken = (order, token) => {
   }
 };
 
+/**
+ * Seguimiento que ve el CLIENTE. Sin PII de terceros ni datos internos: el
+ * estado, la línea de tiempo del pedido (qué etapa se cumplió, cuándo y quién),
+ * el avance y los datos del despacho.
+ */
 const buildPublicTracking = (order) => ({
   orderId: String(order._id),
+  folio: String(order._id).slice(-6).toUpperCase(),
   status: order.status,
+  estado: CLIENT_COPY[order.status]?.titulo || order.status,
+  detalle: CLIENT_COPY[order.status]?.detalle || "",
+  delivery_method: order.delivery_method || "delivery",
+  avance_pct: avancePct(order),
+  // Línea de tiempo: la máquina de estados (pedidos/estados.js) cruzada con el
+  // status_history del pedido. Cada etapa dice si ya ocurrió, cuándo y quién.
+  timeline: lineaDeTiempo(order),
+  created_at: order.created_at || null,
+  delivered_at: order.delivered_at || null,
   shipping: {
     carrier: order.shipping?.carrier || null,
     tracking_number: order.shipping?.tracking_number || null,
     shipment_status: order.shipping?.shipment_status || null,
     estimated_delivery: order.shipping?.estimated_delivery || null,
   },
+  pickup: order.delivery_method === "pickup"
+    ? { location: order.pickup?.location || null, committed_date: order.pickup?.committed_date || null }
+    : null,
   items: Array.isArray(order.items)
     ? order.items.map((it) => ({
         name: it.name || "",
