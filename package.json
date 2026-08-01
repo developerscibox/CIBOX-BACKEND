@@ -1,0 +1,43 @@
+{
+  "name": "cibox_backend",
+  "version": "2.0.0",
+  "description": "Cibox marketplace backend — v2 hardened",
+  "main": "server.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev": "nodemon server.js",
+    "start": "node server.js",
+    "lint": "eslint src",
+    "test": "node --test test/*.test.js",
+      "migrate:wp-images": "node src/scripts/migrateWpImagesToCloudinary.js",
+      "backfill:stock-committed": "node src/scripts/backfillStockCommitted.js",
+      "migrate:categories": "node scripts/migrateProductCategories.js",
+      "migrate:search": "node scripts/migrateSearchNames.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.650.0",
+    "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.10.0",
+    "compression": "^1.7.4",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.0",
+    "express": "^5.2.1",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.3.3",
+    "multer": "^2.0.0",
+    "nodemailer": "^8.0.5",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "transbank-sdk": "^6.1.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "nodemon": "^3.1.14"
+  }
+}
