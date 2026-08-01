@@ -672,18 +672,24 @@ export const listLowStock = async ({ threshold = 10, limit = 100 } = {}) => {
   // Se busca por DISPONIBLE (físico − reservado − comprometido), no por físico:
   // lo comprometido ya está vendido aunque siga en la estantería. Se trae
   // también lo que está bajo su punto de reorden aunque supere el umbral.
+  // OJO: el proyecto tiene sanitizeFilter global — un $expr en una query se
+  // rechaza salvo que su valor vaya envuelto en mongoose.trusted().
+  const DISPONIBLE = {
+    $subtract: ["$stock", { $add: [{ $ifNull: ["$reserved", 0] }, { $ifNull: ["$allocated", 0] }] }],
+  };
   const items = await Product.find({
     is_active: true,
     $or: [
       { stock: mongoose.trusted({ $lte: t }) },
-      { $expr: { $lte: [{ $subtract: ["$stock", { $add: [{ $ifNull: ["$reserved", 0] }, { $ifNull: ["$allocated", 0] }] }] }, t] } },
-      { $expr: { $and: [
-        { $gt: [{ $ifNull: ["$min_stock", 0] }, 0] },
-        { $lte: [
-          { $subtract: ["$stock", { $add: [{ $ifNull: ["$reserved", 0] }, { $ifNull: ["$allocated", 0] }] }] },
-          { $ceil: { $multiply: [{ $ifNull: ["$min_stock", 0] }, 1.5] } },
-        ] },
-      ] } },
+      { $expr: mongoose.trusted({ $lte: [DISPONIBLE, t] }) },
+      {
+        $expr: mongoose.trusted({
+          $and: [
+            { $gt: [{ $ifNull: ["$min_stock", 0] }, 0] },
+            { $lte: [DISPONIBLE, { $ceil: { $multiply: [{ $ifNull: ["$min_stock", 0] }, 1.5] } }] },
+          ],
+        }),
+      },
     ],
   })
     .sort({ stock: 1 })
