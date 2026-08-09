@@ -1,0 +1,48 @@
+# Keep-warm: evita el cold start (~50s) del backend en Render plan free.
+# Render duerme el servicio tras ~15 min sin tráfico.
+#
+# IMPORTANTE: este cron es solo un RESPALDO. El mecanismo primario es el
+# self-ping interno del backend (src/jobs/keepWarm.js), porque GitHub
+# throttlea fuerte los crons `schedule` (medido: dispara cada 2-5 HORAS, no
+# cada 10 min), lo que dejaba el servicio dormido casi siempre. El self-ping
+# interno corre cada ~13 min desde el propio proceso y mantiene el instance
+# despierto de forma continua. Este workflow ayuda a re-despertarlo si el
+# proceso se reinicia.
+name: keep-warm
+
+on:
+  schedule:
+    # Cada 5 minutos (UTC). GitHub no garantiza puntualidad (suele atrasarse).
+    - cron: "*/5 * * * *"
+  # Permite dispararlo manualmente desde la pestaña Actions para probar.
+  workflow_dispatch:
+
+# Evita que se acumulen ejecuciones si una se atrasa.
+concurrency:
+  group: keep-warm
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping /health (con reintentos)
+        # La URL vive en el secret API_HEALTH_URL del repositorio
+        # (Settings → Secrets → Actions), no en el código.
+        run: |
+          URL="${{ secrets.API_HEALTH_URL }}"
+          # Hasta 5 intentos: el primero puede tardar por el cold start.
+          # --max-time 60 cubre el arranque (~50s); espera 15s entre reintentos.
+          for i in 1 2 3 4 5; do
+            echo "Intento $i: $URL"
+            if curl -fsS --max-time 60 "$URL"; then
+              echo ""
+              echo "Backend despierto."
+              exit 0
+            fi
+            echo "Falló el intento $i; reintentando en 15s…"
+            sleep 15
+          done
+          echo "No se pudo contactar al backend tras 5 intentos."
+          exit 1
