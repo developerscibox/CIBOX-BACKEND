@@ -57,13 +57,20 @@ export const brand = {
   },
 
   // ── Dirección de la bodega desde donde se prepara y despacha ──────────────
+  // TODAVÍA SIN DEFINIR. Va vacía a propósito: la tienda oculta el mapa, la
+  // dirección de retiro y el bloque de ubicación mientras no haya una real, en
+  // vez de mostrar una equivocada. Cuando se defina, se setea por variable de
+  // entorno (BRAND_ADDRESS_LINE1, BRAND_COMUNA, …) sin tocar código.
   address: {
-    line1: env("BRAND_ADDRESS_LINE1", "Av. Lo Espejo 01565, Patio 6, Bodega 826"),
-    line2: env("BRAND_ADDRESS_LINE2", "Centro Logístico Mersan"),
-    comuna: env("BRAND_COMUNA", "Lo Espejo"),
-    ciudad: env("BRAND_CIUDAD", "Santiago"),
-    region: env("BRAND_REGION", "Región Metropolitana"),
+    line1: env("BRAND_ADDRESS_LINE1", ""),
+    line2: env("BRAND_ADDRESS_LINE2", ""),
+    comuna: env("BRAND_COMUNA", ""),
+    ciudad: env("BRAND_CIUDAD", ""),
+    region: env("BRAND_REGION", ""),
     pais: env("BRAND_PAIS", "Chile"),
+    // Referencia para llegar ("2da entrada por…") y horario de atención.
+    hint: env("BRAND_ADDRESS_HINT", ""),
+    hours: env("BRAND_ADDRESS_HOURS", ""),
   },
 
   // ── Web ────────────────────────────────────────────────────────────────────

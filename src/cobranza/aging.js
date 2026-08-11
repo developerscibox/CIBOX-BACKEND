@@ -1,5 +1,5 @@
 // Cobranza / aging de cuentas por cobrar (lógica pura, testeable).
-// B12 vende a crédito → este es el dolor nº1. Reglas/cupos reales = B6 (defaults).
+// Cibox vende a crédito → este es el dolor nº1. Reglas/cupos reales = defaults.
 // Las fechas se pasan explícitas (YYYY-MM-DD) para que el cálculo sea determinista.
 
 function diasEntre(desde, hasta) {

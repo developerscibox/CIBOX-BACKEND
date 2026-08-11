@@ -1,3 +1,4 @@
+import path from "node:path";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -47,7 +48,14 @@ const app = express();
 app.set("trust proxy", 1);
 app.set("query parser", "simple");
 
-app.use(helmet());
+// `helmet()` de fábrica manda Cross-Origin-Resource-Policy: same-origin, y eso
+// hace que el navegador BLOQUEE las fotos de producto que sirve /uploads: la
+// tienda vive en otro origen (localhost:8081 en local, Vercel en producción) y
+// el backend en otro (localhost:3001, Render). La API respondía 200 y las
+// imágenes igual no cargaban. Se abre a cross-origin: son archivos públicos,
+// no hay nada que proteger ahí, y el acceso sigue filtrado por la allowlist de
+// CORS para todo lo que sí es sensible.
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(compression());
 const corsAllowlist = (env.allowedOrigins && env.allowedOrigins.length > 0)
   ? env.allowedOrigins
@@ -93,6 +101,18 @@ app.use("/api/uploads", uploadRoutes);
 // Archivos subidos con el driver disk (dev / instalaciones sin Cloudinary):
 // sirve /uploads/<key>. El middleware existía pero nunca se había montado.
 app.use("/uploads", staticUploads);
+
+// Fotos del catálogo inicial. Van en `seed-assets/` y NO en `uploads/`: uploads
+// es lo que sube el usuario en caliente y está fuera del control de versiones,
+// mientras que estas fotos son parte del repositorio (las siembra
+// scripts/seedCatalogoCibox.js y tienen que existir en cualquier clon).
+app.use(
+  "/catalogo",
+  express.static(path.resolve(process.cwd(), "seed-assets/productos"), {
+    maxAge: "7d",
+    setHeaders: (res) => res.setHeader("X-Content-Type-Options", "nosniff"),
+  }),
+);
 app.use("/api/addresses", addressRoutes);
 app.use("/api/tracking", trackingRoutes);
 app.use("/api/guest", guestRoutes);
