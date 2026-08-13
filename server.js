@@ -13,8 +13,17 @@ const start = async () => {
   const stopReservationJob = startReservationReleaseJob();
   const stopKeepWarmJob = startKeepWarmJob();
   const stopTelegramBot = startTelegramBot();
-  const server = app.listen(env.PORT, "0.0.0.0", () => {
-    logger.info({ port: env.PORT, env: env.NODE_ENV }, "Cibox API listening");
+  // Escucha solo en loopback por defecto. Estaba en 0.0.0.0, así que la API
+  // quedaba publicada en el puerto 3001 saltándose nginx: sin TLS y, peor, el
+  // rate limit del login se podía anular falsificando X-Forwarded-For, porque
+  // sin proxy delante el cliente controla esa cabecera. En producción se llega
+  // por nginx (443) y no hace falta exponer el puerto.
+  //
+  // Si algún despliegue necesita exponerlo (contenedor con su propia red), se
+  // setea HOST=0.0.0.0 a propósito, no por descuido.
+  const host = process.env.HOST || "127.0.0.1";
+  const server = app.listen(env.PORT, host, () => {
+    logger.info({ host, port: env.PORT, env: env.NODE_ENV }, "Cibox API listening");
   });
   const shutdown = (signal) => {
     logger.info({ signal }, "Shutting down");

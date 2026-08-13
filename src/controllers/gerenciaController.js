@@ -186,12 +186,21 @@ export const getGerencia = asyncHandler(async (req, res) => {
   // Desglose de ingresos por método sobre lo pagado en el periodo (paid_at).
   const por_metodo = { efectivo: 0, tarjeta: 0, transferencia: 0, webpay: 0 };
   pagosAgg.forEach((x) => { const k = NORM[x._id] || x._id || "otro"; por_metodo[k] = (por_metodo[k] || 0) + r0(x.total); });
+  // Sin costo cargado, `cogs` da 0 y la utilidad bruta termina siendo TODA la
+  // venta con 100% de margen: un número creíble y completamente falso, que es
+  // peor que no mostrar nada. Solo se informa utilidad y margen si hay costo de
+  // verdad en lo vendido; si no, van en null y el panel muestra "sin datos".
+  const conCostoCargado = prods.filter((p) => p.costo > 0).length;
+  const hayCosto = cogs > 0;
   const finanzas = {
     ingresos: { ventas: total, cobrado: cobrosTotal, por_metodo },
-    egresos: { cogs, compras },
-    utilidadBruta,
-    margenBrutoPct: total ? Math.round((utilidadBruta / total) * 100) : null,
+    egresos: { cogs: hayCosto ? cogs : null, compras },
+    utilidadBruta: hayCosto ? utilidadBruta : null,
+    margenBrutoPct: hayCosto && total ? Math.round((utilidadBruta / total) * 100) : null,
     sinCosto: prods.filter((p) => !(p.costo > 0)).length,
+    conCosto: conCostoCargado,
+    // El panel usa esto para explicar por qué no hay cifras en vez de mostrar ceros.
+    costosIncompletos: conCostoCargado < prods.length,
   };
 
   res.json({ success: true, data: { rango: { from, to }, ventas, operacion, equipo, productos, cobros, inventario, finanzas } });
