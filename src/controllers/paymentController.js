@@ -133,7 +133,7 @@ const getVendorEmailsFromOrder = async (order) => {
 };
 
 const sendInternalOrderNotificationEmail = async (order) => {
-  const adminEmail = "soporte@cibox.cl";
+  const adminEmail = "developers@cibox.cl";
 
   try {
     const vendorEmails = await getVendorEmailsFromOrder(order);
