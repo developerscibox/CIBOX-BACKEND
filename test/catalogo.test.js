@@ -9,10 +9,15 @@ test("buildTiers: producto de venta unitaria deja un solo tramo", () => {
 });
 
 test("buildTiers: el pack agrega un tramo con el precio POR UNIDAD dentro del pack", () => {
-  const tiers = buildTiers({ price: 1000, packSize: 6, packPrice: 5400 });
+  const tiers = buildTiers({ price: 1000, packSize: 6, packPrice: 5400, saleUnit: "pack" });
   assert.equal(tiers.length, 2);
-  assert.deepEqual(tiers[0], { min_qty: 1, price: 1000, label: "unidad" });
+  assert.deepEqual(tiers[0], { min_qty: 1, price: 1000, label: "pack" });
   assert.deepEqual(tiers[1], { min_qty: 6, price: 900, label: "pack de 6" });
+});
+
+test("buildTiers: sobre producto suelto el tramo es descuento por volumen, no un pack", () => {
+  const tiers = buildTiers({ price: 2090, packSize: 4, packPrice: 7560, saleUnit: "unidad" });
+  assert.deepEqual(tiers[1], { min_qty: 4, price: 1890, label: "4 o más" });
 });
 
 test("buildTiers: sin precio de pack, el pack no tiene descuento", () => {
