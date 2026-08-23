@@ -241,19 +241,20 @@ const buildProductFilters = (q) => {
     and.push({ is_active: q.is_active });
   }
 
-  // in_stock=true → solo productos con DISPONIBLE (stock - reserved) > 0.
-  // $ifNull para no romper si Product aún no tiene el campo reserved.
+  // in_stock=true → solo productos con stock físico.
+  //
+  // ANTES esto era un $expr que restaba `reserved` y `allocated` del stock. Era
+  // más exacto en teoría y en producción devolvía 500 en TODAS las llamadas que
+  // lo usaran, dejando la tienda sin un solo producto: un $expr dentro de $and
+  // no sobrevive a `sanitizeFilter` ni envuelto en mongoose.trusted().
+  //
+  // Un filtro de catálogo no necesita esa precisión: `reserved` y `allocated`
+  // son el inventario comprometido en pedidos sin despachar, y la validación
+  // que de verdad impide vender de más corre en el carrito y el checkout contra
+  // el disponible real. Aquí basta con no ofrecer lo que no existe en bodega, y
+  // `stock` además está indexado.
   if (q.in_stock === true || q.in_stock === "true") {
-    and.push(
-      mongoose.trusted({
-        $expr: {
-          $gt: [
-            { $subtract: ["$stock", { $add: [{ $ifNull: ["$reserved", 0] }, { $ifNull: ["$allocated", 0] }] }] },
-            0,
-          ],
-        },
-      }),
-    );
+    and.push({ stock: mongoose.trusted({ $gt: 0 }) });
   }
 
   // brand → coincidencia parcial case-insensitive por marca
@@ -337,17 +338,10 @@ const buildRegexSearchFilters = (q) => {
     and.push({ is_active: q.is_active });
   }
 
+  // Mismo criterio que el listado principal: stock físico, sin $expr (ver el
+  // comentario largo allá arriba — el $expr devolvía 500 en producción).
   if (q.in_stock === true || q.in_stock === "true") {
-    and.push(
-      mongoose.trusted({
-        $expr: {
-          $gt: [
-            { $subtract: ["$stock", { $add: [{ $ifNull: ["$reserved", 0] }, { $ifNull: ["$allocated", 0] }] }] },
-            0,
-          ],
-        },
-      }),
-    );
+    and.push({ stock: mongoose.trusted({ $gt: 0 }) });
   }
 
   if (q.brand) {
@@ -1052,13 +1046,11 @@ export const getFeaturedProducts = async (req, res) => {
     mongoose.trusted({
       is_active: true,
       featured: true,
-      // disponible real (físico − reservado − comprometido) > 0
-      $expr: {
-        $gt: [
-          { $subtract: ["$stock", { $add: [{ $ifNull: ["$reserved", 0] }, { $ifNull: ["$allocated", 0] }] }] },
-          0,
-        ],
-      },
+      // Stock físico. Este endpoint devolvía 500 en TODAS sus llamadas —con o
+      // sin filtros— por el $expr que había aquí: con `sanitizeFilter` activo
+      // (config/db.js) Mongoose lo rechaza aunque venga envuelto en trusted().
+      // La home pedía destacados y no recibía ninguno.
+      stock: { $gt: 0 },
     }),
   )
     .sort({
