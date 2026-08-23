@@ -289,6 +289,14 @@ export const updateUserRole = asyncHandler(async (req, res) => {
   const target = await User.findById(req.params.id).lean();
   if (!target) throw new NotFoundError("Usuario no encontrado");
 
+  // Simétrico a la regla de arriba: si un gerente no puede ASCENDER a nadie a
+  // administrador, tampoco puede DEGRADAR a uno. Antes solo lo frenaba el
+  // "debe quedar al menos un administrador", así que con dos admins activos un
+  // gerente podía bajarle el rol a uno de ellos.
+  if (target.role === ROLES.ADMIN && req.user.role !== ROLES.ADMIN) {
+    throw new ForbiddenError("Solo un administrador puede cambiar el rol de otro administrador");
+  }
+
   // No dejar 0 administradores activos al degradar al último admin
   if (target.role === ROLES.ADMIN && role !== ROLES.ADMIN) {
     const activeAdmins = await User.countDocuments({
@@ -350,6 +358,12 @@ export const toggleUserActive = asyncHandler(async (req, res) => {
 
   const target = await User.findById(req.params.id).lean();
   if (!target) throw new NotFoundError("Usuario no encontrado");
+
+  // Mismo criterio que updateUserRole: desactivar a un administrador es
+  // equivalente a quitarle el acceso, así que solo otro admin puede hacerlo.
+  if (target.role === ROLES.ADMIN && is_active === false && req.user.role !== ROLES.ADMIN) {
+    throw new ForbiddenError("Solo un administrador puede desactivar a otro administrador");
+  }
 
   // No dejar 0 administradores activos al desactivar al último admin
   if (target.role === ROLES.ADMIN && target.is_active && is_active === false) {

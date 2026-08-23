@@ -29,6 +29,9 @@ const cartItemSchema = new mongoose.Schema(
     unit_price: { type: Number, required: true, min: 0 },
     subtotal: { type: Number, required: true, min: 0 },
     tier_label: { type: String, default: null, trim: true },
+    // Texto del precio por unidad de medida (decreto 38/2024) calculado sobre el
+    // precio realmente cobrado. Se congela con el ítem, igual que unit_price.
+    ppum_label: { type: String, default: "", trim: true },
     // Unidades por caja (paso de cantidad). Cibox vende solo por caja.
     box_qty: { type: Number, default: 1, min: 1 },
     product_type: {
@@ -63,6 +66,17 @@ const cartSchema = new mongoose.Schema(
     items: {
       type: [cartItemSchema],
       default: [],
+    },
+    // Marca de origen: el carrito lo armó "Recomprar todo" desde Mi Despensa y
+    // por lo tanto lleva el descuento de despensa.
+    //
+    // POR QUÉ EXISTE: sin esta marca, el checkout mostraba el carrito con el
+    // descuento aplicado pero al crear la orden se recalculaba todo a precio de
+    // lista (rebuildItemsFromCart no sabía de dónde venía), y el cliente
+    // terminaba pagando ~11% más de lo que había aceptado en pantalla.
+    from_pantry: {
+      type: Boolean,
+      default: false,
     },
     total: {
       type: Number,

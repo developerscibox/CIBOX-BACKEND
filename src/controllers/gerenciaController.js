@@ -4,6 +4,7 @@ import Order from "../models/Order.js";
 import Product from "../models/Product.js";
 import StockMovement from "../models/StockMovement.js";
 import { ORDER_STATUS, PAID_STATUSES, MOVEMENT_TYPES } from "../utils/constants.js";
+import { ymdChile, inicioDiaChile, finDiaChile } from "../utils/fechas.js";
 
 // Centro de mando del gerente: un solo endpoint que agrega métricas REALES del
 // negocio para un rango. Sin datos sintéticos: lo que no hay, viene en 0/[].
@@ -23,11 +24,16 @@ const r0 = (n) => Math.round(Number(n) || 0);
 const TZ = "America/Santiago"; // agregaciones por día/hora en hora chilena, no UTC
 
 export const getGerencia = asyncHandler(async (req, res) => {
-  const today = new Date().toISOString().slice(0, 10);
+  // Fechas y límites en hora de CHILE. Con toISOString (UTC) y límites en hora
+  // del proceso (también UTC), el periodo "Hoy" consultado después de las 20:00
+  // mostraba solo lo vendido a partir de esa hora y rotulaba la fecha de mañana,
+  // mientras la serie diaria se agrupaba con timezone: TZ. Filtro y buckets
+  // tienen que estar en la misma zona o los reportes pierden la tarde.
+  const today = ymdChile();
   const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : today;
   const to = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : today;
-  const start = new Date(`${from}T00:00:00.000`);
-  const end = new Date(`${to}T23:59:59.999`);
+  const start = inicioDiaChile(from);
+  const end = finDiaChile(to);
   const durMs = Math.max(1, end - start);
   const prevStart = new Date(start.getTime() - durMs);
   const prevEnd = new Date(start.getTime() - 1);
@@ -146,12 +152,20 @@ export const getGerencia = asyncHandler(async (req, res) => {
       if (pm != null) prepPorPersona[b]._t.push(pm);
     }
   }
+  // null cuando no hay nada que medir: "0 min" se lee como un tiempo medido y
+  // hacía que el panel declarara "flujo al día" sin un solo pedido entregado.
+  // Mismo criterio que dashboard360Controller, que ya lo resolvía así.
+  const promedioONull = (arr) => (arr.length ? r0(avg(arr)) : null);
   const tiempos = {
-    espera_pago: r0(avg(D.espera_pago)), espera_cola: r0(avg(D.espera_cola)),
-    preparacion: r0(avg(D.preparacion)), espera_entrega: r0(avg(D.espera_entrega)), total: r0(avg(D.total)),
+    espera_pago: promedioONull(D.espera_pago), espera_cola: promedioONull(D.espera_cola),
+    preparacion: promedioONull(D.preparacion), espera_entrega: promedioONull(D.espera_entrega),
+    total: promedioONull(D.total),
   };
   const ETAPAS = { espera_pago: "Espera de pago", espera_cola: "Espera en cola", preparacion: "Preparación", espera_entrega: "Espera de entrega" };
-  const cuelloE = Object.entries(ETAPAS).map(([k, l]) => [l, tiempos[k]]).sort((a, b) => b[1] - a[1])[0];
+  const cuelloE = Object.entries(ETAPAS)
+    .map(([k, l]) => [l, tiempos[k]])
+    .filter(([, v]) => v != null)
+    .sort((a, b) => b[1] - a[1])[0];
   const cola = { pending: 0, paid: 0, preparing: 0, ready: 0 };
   colaAgg.forEach((x) => { cola[x._id] = x.n; });
   const horas = Math.max(1, durMs / 3600000);
@@ -182,25 +196,54 @@ export const getGerencia = asyncHandler(async (req, res) => {
   // ── Finanzas: estado de resultados del periodo (datos reales) ──
   const cogs = prods.reduce((a, p) => a + (p.costo || 0), 0);
   const compras = r0(comprasAgg[0]?.compras);
-  const utilidadBruta = total - cogs;
   // Desglose de ingresos por método sobre lo pagado en el periodo (paid_at).
   const por_metodo = { efectivo: 0, tarjeta: 0, transferencia: 0, webpay: 0 };
-  pagosAgg.forEach((x) => { const k = NORM[x._id] || x._id || "otro"; por_metodo[k] = (por_metodo[k] || 0) + r0(x.total); });
-  // Sin costo cargado, `cogs` da 0 y la utilidad bruta termina siendo TODA la
-  // venta con 100% de margen: un número creíble y completamente falso, que es
-  // peor que no mostrar nada. Solo se informa utilidad y margen si hay costo de
-  // verdad en lo vendido; si no, van en null y el panel muestra "sin datos".
+  let cobradoReal = 0;
+  pagosAgg.forEach((x) => { const k = NORM[x._id] || x._id || "otro"; const v = r0(x.total); por_metodo[k] = (por_metodo[k] || 0) + v; cobradoReal += v; });
+  // Utilidad y margen solo cuando la cifra significa algo.
+  //
+  // Dos trampas que este bloque evita:
+  //
+  // 1. Sin costo cargado, `cogs` da 0 y la utilidad bruta sería TODA la venta
+  //    con 100% de margen: un número creíble y completamente falso.
+  // 2. Con UN SOLO producto con costo, la guardia `cogs > 0` se activaba igual y
+  //    cargaba TODOS los ingresos del periodo contra el costo de ese único
+  //    producto: margen publicado del 95-99%, igual de falso pero más difícil de
+  //    detectar. Es lo que iba a pasar apenas empezaran a cargar costos.
+  //
+  // La comparación correcta enfrenta bases equivalentes: el ingreso de los
+  // productos CON costo conocido contra su propio costo. Y se exige una
+  // cobertura mínima del periodo para publicarla; por debajo de eso la muestra
+  // no representa al negocio y va en null, con el detalle para explicarlo.
+  const COBERTURA_MINIMA = 0.8; // 80% del ingreso del periodo con costo conocido
   const conCostoCargado = prods.filter((p) => p.costo > 0).length;
-  const hayCosto = cogs > 0;
+  const ingresoConCosto = prods.reduce((a, p) => a + (p.costo > 0 ? p.revenue : 0), 0);
+  const ingresoProductos = prods.reduce((a, p) => a + p.revenue, 0);
+  const cobertura = ingresoProductos > 0 ? ingresoConCosto / ingresoProductos : 0;
+  const hayCosto = cogs > 0 && cobertura >= COBERTURA_MINIMA;
+  const utilidadConCosto = ingresoConCosto - cogs;
   const finanzas = {
-    ingresos: { ventas: total, cobrado: cobrosTotal, por_metodo },
+    // "Cobrado" salía de cobrosAgg, que usa EXACTAMENTE el mismo filtro que el
+    // total de ventas (mismo estado, misma fecha de creación, mismo campo), así
+    // que por construcción era una copia de "Ventas" y declaraba cobrado lo que
+    // no se había cobrado — una venta a crédito entraba ahí al crearse. Lo real
+    // es lo que tiene paid_at dentro del periodo, que es lo que ya calcula
+    // pagosAgg para el desglose por método.
+    ingresos: { ventas: total, cobrado: cobradoReal, por_metodo },
     egresos: { cogs: hayCosto ? cogs : null, compras },
-    utilidadBruta: hayCosto ? utilidadBruta : null,
-    margenBrutoPct: hayCosto && total ? Math.round((utilidadBruta / total) * 100) : null,
+    utilidadBruta: hayCosto ? r0(utilidadConCosto) : null,
+    // Sobre el ingreso de los productos con costo, no sobre `total`, que además
+    // incluye el flete: subir la tarifa de despacho "mejoraba el margen" sin
+    // haber vendido más.
+    margenBrutoPct:
+      hayCosto && ingresoConCosto > 0
+        ? Math.round((utilidadConCosto / ingresoConCosto) * 100)
+        : null,
     sinCosto: prods.filter((p) => !(p.costo > 0)).length,
     conCosto: conCostoCargado,
     // El panel usa esto para explicar por qué no hay cifras en vez de mostrar ceros.
     costosIncompletos: conCostoCargado < prods.length,
+    coberturaCostosPct: Math.round(cobertura * 100),
   };
 
   res.json({ success: true, data: { rango: { from, to }, ventas, operacion, equipo, productos, cobros, inventario, finanzas } });

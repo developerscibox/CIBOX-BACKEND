@@ -14,7 +14,9 @@
 // sistema cambia. Ver PLAN.md §6 para el checklist de conexión.
 // =============================================================================
 
+import crypto from "node:crypto";
 import { logger } from "../utils/logger.js";
+import { env } from "../config/env.js";
 
 /**
  * CONTRATO — todo proveedor de seguimiento implementa estos tres métodos.
@@ -139,16 +141,49 @@ export class SeguimientoLog {
   }
 
   /**
-   * Verificación de firma del webhook. El adapter de log NO valida nada y lo
-   * dice en voz alta: un proveedor real DEBE implementar esto (HMAC, mTLS, o
-   * lo que exija su documentación) o cualquiera podría mover los pedidos.
+   * Verificación de firma del webhook.
+   *
+   * ANTES devolvía true incondicional con un warning que decía "no usar en
+   * producción"… siendo el adapter activo POR DEFECTO en producción. Como la
+   * referencia del pedido es 'LOG-' + los últimos 6 caracteres del id —el mismo
+   * folio que el cliente ve en su correo—, cualquiera en internet podía marcar
+   * un pedido como "en camino" o "entregado", y "entregado" es casi terminal.
+   *
+   * Ahora falla cerrado: sin secreto configurado, en producción se rechaza. En
+   * desarrollo se deja pasar para poder ejercitar el flujo de punta a punta,
+   * que es justamente para lo que existe este adapter.
    */
-  verificarFirma() {
-    logger.warn(
-      { proveedor: this.nombre },
-      "seguimiento.webhook: el adapter de log no verifica firma — no usar en producción",
+  verificarFirma({ headers } = {}) {
+    const secreto = env.TRACKING_WEBHOOK_SECRET || "";
+
+    if (!secreto) {
+      if (env.NODE_ENV === "production") {
+        logger.error(
+          { proveedor: this.nombre },
+          "seguimiento.webhook: rechazado — TRACKING_WEBHOOK_SECRET sin definir en producción",
+        );
+        return false;
+      }
+      logger.warn(
+        { proveedor: this.nombre },
+        "seguimiento.webhook: sin secreto configurado; se acepta solo porque no es producción",
+      );
+      return true;
+    }
+
+    // Secreto compartido por cabecera. No es HMAC del cuerpo porque req.rawBody
+    // no se captura en ningún punto del backend; cuando entre el proveedor real
+    // y traiga su esquema de firma, este método es el único lugar a cambiar.
+    const recibido = String(
+      headers?.["x-webhook-secret"] || headers?.["x-tracking-signature"] || "",
     );
-    return true;
+    if (!recibido) return false;
+
+    // Comparación en tiempo constante: un === filtra el secreto por el tiempo
+    // de respuesta, carácter a carácter.
+    const a = Buffer.from(recibido);
+    const b = Buffer.from(secreto);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
 }
 

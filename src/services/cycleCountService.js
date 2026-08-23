@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import CycleCount from "../models/CycleCount.js";
 import Product from "../models/Product.js";
 import { adjustStock } from "./inventoryService.js";
@@ -142,12 +143,26 @@ export const updateCountLines = async ({ id, counts, by }) => {
     byProduct.set(pid, qty);
   }
 
+  // Stock que el sistema tiene AHORA para las líneas que se están contando: es
+  // la referencia contra la que se medirá la discrepancia al cerrar. Sin esto,
+  // el cierre comparaba contra el stock del momento del cierre y revertía todo
+  // lo despachado mientras se contaba.
+  const idsContados = [...byProduct.keys()].map((s) => new mongoose.Types.ObjectId(s));
+  const stockActual = new Map(
+    (await Product.find({ _id: mongoose.trusted({ $in: idsContados }) })
+      .select("stock")
+      .lean()).map((p) => [String(p._id), Number(p.stock || 0)]),
+  );
+
+  const ahora = new Date();
   let touched = 0;
   for (const line of count.lines) {
     const qty = byProduct.get(String(line.product_id));
     if (qty === undefined) continue;
     line.counted_qty = qty;
     line.counted = true;
+    line.stock_at_count = stockActual.get(String(line.product_id)) ?? null;
+    line.counted_at = ahora;
     touched += 1;
   }
 
@@ -195,7 +210,18 @@ export const closeCount = async ({ id, by }) => {
     }
 
     const current = Number(product.stock || 0);
-    const delta = Number(line.counted_qty) - current;
+
+    // Se aplica la DISCREPANCIA detectada al contar, no se fuerza el stock al
+    // valor contado.
+    //
+    // ANTES: delta = contado − stock_al_cerrar. Si el equipo contaba a las 9 y
+    // cerraba a las 13, todo lo despachado en el medio se revertía y volvía al
+    // stock: la herramienta que existe para cuadrar el inventario lo
+    // descuadraba. Ahora se compara contra el stock del INSTANTE del conteo, así
+    // que las ventas posteriores quedan intactas y solo se corrige la diferencia
+    // real que encontró la persona en el estante.
+    const referencia = line.stock_at_count == null ? current : Number(line.stock_at_count);
+    const delta = Number(line.counted_qty) - referencia;
     if (delta === 0) continue; // ya coincide, nada que ajustar
 
     try {

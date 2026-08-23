@@ -1,7 +1,9 @@
+import mongoose from "mongoose";
 import Coupon from "../models/Coupon.js";
 import CouponUsage from "../models/CouponUsage.js";
 import Order from "../models/Order.js";
 import { ConflictError } from "../utils/errors.js";
+import { ORDER_STATUS } from "../utils/constants.js";
 
 /**
  * Carga un cupón por código (uppercase normalizado). Lanza NotFoundError si no existe.
@@ -66,7 +68,22 @@ export const validateCouponForUser = async ({ coupon, userId, subtotal }) => {
       user_id: userId,
     });
 
-    if (userUses >= Number(coupon.max_uses_per_user || 1)) {
+    // El CouponUsage recién se escribe al COBRAR, así que hay que contar
+    // también los pedidos pendientes que ya lo llevan aplicado.
+    //
+    // POR QUÉ: sin esto, un cliente podía dejar dos pedidos pendientes y ambos
+    // recibían el descuento, porque ninguno figuraba todavía como uso. Al
+    // cobrar el segundo, applyCouponToOrder chocaba contra el índice único de
+    // "un uso por persona" y lanzaba ConflictError DENTRO de la transacción de
+    // markAsPaid: el pedido quedaba imposible de marcar como pagado por ningún
+    // camino del panel, con el cliente ya habiendo transferido.
+    const pendientesConEsteCupon = await Order.countDocuments({
+      user_id: userId,
+      "coupon.coupon_id": coupon._id,
+      status: ORDER_STATUS.PENDING,
+    });
+
+    if (userUses + pendientesConEsteCupon >= Number(coupon.max_uses_per_user || 1)) {
       return {
         valid: false,
         message: "Ya alcanzaste el máximo de usos para este cupón",
@@ -74,9 +91,18 @@ export const validateCouponForUser = async ({ coupon, userId, subtotal }) => {
     }
 
     if (coupon.first_purchase_only) {
+      // Cuenta pagados Y pendientes: un pedido pendiente ya es "una compra en
+      // curso", y si no se cuenta, el cliente recibe el descuento de primera
+      // compra en todos los pedidos que deje abiertos a la vez.
       const previousOrders = await Order.countDocuments({
         user_id: userId,
-        status: { $in: ["paid", "preparing", "shipped", "delivered"] },
+        // Sin mongoose.trusted, sanitizeFilter deja { $eq: { $in: [...] } } y
+        // castear ese objeto al String status tira CastError. La excepción sube
+        // por resolveCouponDiscount y aborta la transacción del checkout: el
+        // PRIMER pedido de un cliente registrado no se podía pagar.
+        status: mongoose.trusted({
+          $in: [ORDER_STATUS.PENDING, "paid", "preparing", "shipped", "delivered"],
+        }),
       });
       if (previousOrders > 0) {
         return {
@@ -200,8 +226,12 @@ export const revertCouponUsage = async ({ orderId }, session) => {
 
   if (!usage) return null;
 
+  // El $gt sin trusted tiraba CastError sobre el Number used_count. Como esto
+  // corre dentro de la transacción de cancelar/reembolsar/eliminar, la
+  // transacción se abortaba entera: un pedido pagado con cupón no se podía
+  // cancelar ni reembolsar NUNCA.
   await Coupon.updateOne(
-    { _id: usage.coupon_id, used_count: { $gt: 0 } },
+    { _id: usage.coupon_id, used_count: mongoose.trusted({ $gt: 0 }) },
     { $inc: { used_count: -1 } },
     { session },
   );

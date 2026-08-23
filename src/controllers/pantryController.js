@@ -44,7 +44,7 @@ export const getMyPantry = asyncHandler(async (req, res) => {
   // mongoose.trusted(); si no, los rechaza con "ID inválido".
   const products = productIds.length
     ? await Product.find({ _id: mongoose.trusted({ $in: productIds }) })
-        .select("name pricing thumbnail images stock")
+        .select("name pricing price ppum thumbnail images stock")
         .lean()
     : [];
   const productById = new Map(products.map((p) => [String(p._id), p]));
@@ -56,6 +56,9 @@ export const getMyPantry = asyncHandler(async (req, res) => {
           _id: p._id,
           name: p.name,
           pricing: p.pricing,
+          // Necesarios para el precio por unidad de medida (decreto 38/2024).
+          price: p.price,
+          ppum: p.ppum,
           thumbnail: p.thumbnail || p.images?.[0] || "",
           images: p.images || [],
           stock: p.stock,
@@ -227,6 +230,9 @@ export const checkoutPantry = asyncHandler(async (req, res) => {
     user_id: userId,
     status: "active",
     items: cartItems,
+    // Sin esta marca, createOrderFromCart recalcula a precio de lista y se cobra
+    // más de lo que muestra el resumen del checkout.
+    from_pantry: true,
     total,
   });
 

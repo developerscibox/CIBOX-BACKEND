@@ -8,8 +8,11 @@ import {
   chequesPorVencer,
 } from "../cobranza/aging.js";
 import { diasMora } from "../services/clienteService.js";
+import { ymdChile } from "../utils/fechas.js";
 
-const hoyISO = () => new Date().toISOString().slice(0, 10);
+// Hora de Chile, no UTC: con toISOString, desde las 20:00 el aging avanzaba un
+// día antes de tiempo y marcaba como morosos a clientes que estaban al día.
+const hoyISO = () => ymdChile();
 
 // Top 10 deudores: agrupa las deudas pendientes por cliente_id (o por el
 // nombre snapshot para deudas legadas sin ficha de cliente).

@@ -23,6 +23,25 @@ const priceFields = {
       unit: z.string().trim().max(10).optional(),
     })
     .optional(),
+  // Precio por unidad de medida (decreto 38/2024). Solo entradas: `value`,
+  // `unit_label` y `text` los deriva el modelo y se rechazan si llegan.
+  ppum: z
+    .object({
+      mode: z.enum(["auto", "exempt"]).optional(),
+      exempt_reason: z.string().trim().max(60).optional(),
+      net_value: z.number().nonnegative().optional(),
+      net_unit: z.string().trim().max(12).optional(),
+      drained_value: z.number().nonnegative().optional(),
+      pieces_per_pack: z.number().int().nonnegative().optional(),
+      length_per_piece_m: z.number().nonnegative().optional(),
+      bulk: z.boolean().optional(),
+      preset: z.string().trim().max(20).optional(),
+    })
+    .strict("Los campos derivados del PPUM no se editan a mano")
+    .refine((v) => v.mode !== "exempt" || Boolean(v.exempt_reason), {
+      message: "Un producto exceptuado del PPUM debe indicar el motivo (art. 8° del decreto 38/2024)",
+    })
+    .optional(),
   // Venta por pack/caja: 0 o 1 = venta unitaria.
   pack_size: z.number().int().nonnegative().optional(),
   pack_price: z.number().nonnegative().optional(),
@@ -102,6 +121,7 @@ export const updateProductSchema = z
     price: baseCreate.price.optional(),
     sale_unit: z.enum(SALE_UNITS).optional(),
     unit_content: baseCreate.unit_content,
+    ppum: baseCreate.ppum,
     pack_size: baseCreate.pack_size,
     pack_price: baseCreate.pack_price,
     tax: baseCreate.tax,
@@ -132,6 +152,7 @@ export const adminUpdateProductSchema = z
     price: baseCreate.price.optional(),
     sale_unit: z.enum(SALE_UNITS).optional(),
     unit_content: baseCreate.unit_content,
+    ppum: baseCreate.ppum,
     pack_size: baseCreate.pack_size,
     pack_price: baseCreate.pack_price,
     tax: baseCreate.tax,

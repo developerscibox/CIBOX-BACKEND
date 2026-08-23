@@ -131,6 +131,9 @@ const VENDOR_UPDATE_FIELDS = new Set([
   "price",
   "sale_unit",
   "unit_content",
+  // Precio por unidad de medida (decreto 38/2024): solo las entradas; los
+  // derivados los calcula el modelo y el validador rechaza que lleguen.
+  "ppum",
   "pack_size",
   "pack_price",
   "tax",
@@ -201,19 +204,24 @@ const buildSort = (sort) => {
   switch (sort) {
     case "price_asc":
       // pricing.min_price tiene índice y se mantiene en hooks (pre save/update)
-      return { "pricing.min_price": 1, created_at: -1 };
+      return { "pricing.min_price": 1, created_at: -1, _id: 1 };
     case "price_desc":
-      return { "pricing.min_price": -1, created_at: -1 };
+      return { "pricing.min_price": -1, created_at: -1, _id: 1 };
     case "newest":
-      return { created_at: -1 };
+      return { created_at: -1, _id: 1 };
     case "oldest":
-      return { created_at: 1 };
+      return { created_at: 1, _id: 1 };
+    // El _id final es el desempate. Sin él, "Más vendidos" y "Mejor valorados"
+    // ordenaban por campos que hoy valen 0 en los 763 productos: un empate
+    // total, que Mongo resuelve distinto en cada página. Con scroll infinito
+    // eso significaba productos repetidos y cerca de la mitad del catálogo
+    // nunca visible.
     case "rating":
-      return { average_rating: -1, reviews_count: -1 };
+      return { average_rating: -1, reviews_count: -1, _id: 1 };
     case "popular":
-      return { reviews_count: -1, average_rating: -1 };
+      return { reviews_count: -1, average_rating: -1, _id: 1 };
     default:
-      return { created_at: -1 };
+      return { created_at: -1, _id: 1 };
   }
 };
 
@@ -296,8 +304,17 @@ const buildProductFilters = (q) => {
       // con trusted(). $regex vía trusted() sí pasa el sanitizer (como el de marca);
       // para este catálogo el escaneo es despreciable. El fallback multicampo
       // (buildRegexSearchFilters) cubre marca/categoría/descripción si no hay match.
-      const normalized = normalizeText(raw);
-      and.push({ search_name: mongoose.trusted({ $regex: escapeRegex(normalized), $options: "i" }) });
+      // Cada palabra por separado, todas deben aparecer, en cualquier orden.
+      //
+      // ANTES se armaba un solo regex con la frase completa, o sea exigía que
+      // las palabras vinieran pegadas y en ese orden: buscar "leche colun" no
+      // encontraba "Leche Natural Colun 1 L" y la tienda respondía "sin
+      // resultados" en silencio. Buscar por varias palabras es justamente la
+      // forma normal de buscar en un supermercado.
+      const palabras = normalizeText(raw).split(/\s+/).filter(Boolean).slice(0, 8);
+      for (const palabra of palabras) {
+        and.push({ search_name: mongoose.trusted({ $regex: escapeRegex(palabra), $options: "i" }) });
+      }
     }
   }
 
@@ -407,8 +424,10 @@ const validateBoxItemsServer = async (items, currentProductId = null) => {
   if (currentProductId && unique.has(String(currentProductId))) {
     throw new BadRequestError("Una caja no puede incluirse a sí misma");
   }
+  // Sin trusted, el $in sobre el path ObjectId tira CastError antes de
+  // consultar: no se podía crear ni editar ningún producto de tipo caja.
   const products = await Product.find({
-    _id: { $in: ids },
+    _id: mongoose.trusted({ $in: ids }),
     is_active: true,
   })
     .select("_id product_type")
@@ -1236,6 +1255,22 @@ export const getProductFicha = asyncHandler(async (req, res) => {
 // Formato de venta de una fila del CSV. pack_size/pack_price son los nombres
 // nuevos; box_qty/box_price se aceptan como alias por compatibilidad con las
 // plantillas antiguas. Los tramos de precio los deriva el modelo.
+// Datos del PPUM que el contenido del envase no alcanza a cubrir: metros por
+// rollo (art. 11 n°5), peso drenado (art. 10), granel (art. 5°) y la marca de
+// excepción del art. 8°. Todas las columnas son opcionales en la plantilla.
+const importPpum = (row) => {
+  const ppum = {};
+  if (row.drained_value !== undefined) ppum.drained_value = Number(row.drained_value);
+  if (row.pieces_per_pack !== undefined) ppum.pieces_per_pack = Number(row.pieces_per_pack);
+  if (row.length_per_piece_m !== undefined) ppum.length_per_piece_m = Number(row.length_per_piece_m);
+  if (row.bulk !== undefined) ppum.bulk = Boolean(row.bulk);
+  if (row.ppum_exempt_reason) {
+    ppum.mode = "exempt";
+    ppum.exempt_reason = String(row.ppum_exempt_reason).trim();
+  }
+  return ppum;
+};
+
 const importSaleFormat = (row) => ({
   price: Number(row.price),
   sale_unit: row.sale_unit || "unidad",
@@ -1243,6 +1278,7 @@ const importSaleFormat = (row) => ({
     value: Number(row.content_value ?? 0),
     unit: String(row.content_unit ?? "").trim(),
   },
+  ppum: importPpum(row),
   pack_size: Number(row.pack_size ?? row.box_qty ?? 0),
   pack_price: Number(row.pack_price ?? row.box_price ?? 0),
   tax: { afecto: row.iva_afecto !== false },
@@ -1366,6 +1402,10 @@ export const importBulkProducts = asyncHandler(async (req, res) => {
               value: Number(row.content_value ?? existing.unit_content?.value ?? 0),
               unit: String(row.content_unit ?? existing.unit_content?.unit ?? ""),
             };
+          }
+          const ppumRow = importPpum(row);
+          if (Object.keys(ppumRow).length) {
+            existing.ppum = { ...(existing.ppum?.toObject?.() ?? existing.ppum ?? {}), ...ppumRow };
           }
           const packSize = row.pack_size ?? row.box_qty;
           const packPrice = row.pack_price ?? row.box_price;

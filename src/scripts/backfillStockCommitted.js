@@ -20,10 +20,13 @@ import { ORDER_STATUS } from "../utils/constants.js";
 async function run() {
   await mongoose.connect(env.MONGO_URI, { serverSelectionTimeoutMS: 10000 });
 
+  // updateMany de Mongoose SÍ pasa por el sanitizeFilter global, así que los
+  // operadores van envueltos en mongoose.trusted o el script muere con
+  // CastError sin haber tocado un solo pedido.
   const res = await Order.updateMany(
     {
-      status: { $nin: [ORDER_STATUS.CANCELLED, ORDER_STATUS.REFUNDED] },
-      stock_committed: { $ne: true },
+      status: mongoose.trusted({ $nin: [ORDER_STATUS.CANCELLED, ORDER_STATUS.REFUNDED] }),
+      stock_committed: mongoose.trusted({ $ne: true }),
     },
     { $set: { stock_committed: true } },
   );

@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import { normalizeText } from "../utils/text.js";
 import { brand } from "../config/brand.js";
 import { buildTiers } from "../catalogo/precio.js";
+import { ppumDeProducto } from "../catalogo/ppum.js";
 
 const DEFAULT_IVA_PCT = brand.legal.iva_pct;
 
@@ -120,6 +121,38 @@ const productSchema = new mongoose.Schema(
       value: { type: Number, default: 0, min: 0 },
       unit: { type: String, trim: true, default: "" },
     },
+    // Precio por Unidad de Medida — decreto 38/2024 del Min. de Economía.
+    // Lo que el consumidor ve ("$1.611 por kg") sale de `text`; `value` existe
+    // para poder ordenar y comparar sin recalcular en cada pantalla.
+    //
+    // Los campos de entrada solo hacen falta cuando `unit_content` no alcanza:
+    // rollos (el art. 11 n°5 exige metro), conservas con peso drenado (art. 10),
+    // granel (art. 5°) y productos exceptuados (art. 8°).
+    ppum: {
+      // "auto" = se calcula; "exempt" = exceptuado, no se publica PPUM.
+      mode: { type: String, enum: ["auto", "exempt"], default: "auto" },
+      exempt_reason: { type: String, trim: true, default: "" },
+
+      // Overrides de contenido. En 0/"" manda `unit_content`.
+      net_value: { type: Number, default: 0, min: 0 },
+      net_unit: { type: String, trim: true, default: "" },
+      // Art. 10: peso escurrido o drenado, cuando el envase lo declara.
+      drained_value: { type: Number, default: 0, min: 0 },
+      // Art. 6°: piezas idénticas dentro del mismo envase.
+      pieces_per_pack: { type: Number, default: 0, min: 0 },
+      // Art. 11 n°5: metros por rollo. Sin esto, el papel se informa por unidad.
+      length_per_piece_m: { type: Number, default: 0, min: 0 },
+      // Art. 5°: producto a granel — el precio de venta ES el PPUM.
+      bulk: { type: Boolean, default: false },
+      // Art. 11: unidad preestablecida. Vacío = se resuelve por categoría.
+      preset: { type: String, trim: true, default: "" },
+
+      // ── Derivados. NO se editan a mano: los calcula el pre-save.
+      value: { type: Number, default: 0, min: 0 },
+      unit_label: { type: String, trim: true, default: "" },
+      text: { type: String, trim: true, default: "" },
+    },
+
     // Unidades por pack/caja cuando la venta es por bulto. 0 o 1 = venta unitaria.
     pack_size: { type: Number, default: 0, min: 0 },
     // Precio del pack completo. Si es 0 y hay pack_size, se calcula price × pack_size.
@@ -260,7 +293,57 @@ productSchema.pre("save", function () {
     saleUnit: this.sale_unit,
   });
   this.pricing.min_price = Math.min(...this.pricing.tiers.map((t) => Number(t.price || 0)));
+
+  // PPUM: mismo criterio que los tramos — se deriva, nunca se edita a mano.
+  Object.assign(this.ppum || (this.ppum = {}), derivarPpum(this));
+  // Al crear, y al pasar de despublicado a publicado, se exige PPUM. Editar un
+  // producto que YA estaba activo no se bloquea (ver la función).
+  exigirPpumParaPublicar({
+    is_active: this.is_active,
+    product_type: this.product_type,
+    ppum: this.ppum,
+    name: this.name,
+    yaEstabaActivo: !this.isNew && !this.isModified("is_active"),
+  });
 });
+
+/**
+ * Un producto no se publica sin PPUM. Si de verdad está exceptuado (art. 8°),
+ * hay que decirlo explícitamente con `ppum.mode = "exempt"`; lo que no se
+ * permite es publicarlo y que el precio quede sin su unidad de medida.
+ *
+ * Solo bloquea al CREAR y al ACTIVAR. Un producto que ya estaba publicado sin
+ * PPUM (catálogo heredado) se puede seguir editando: si bloqueáramos también
+ * ahí, corregirle el precio a un producto viejo sería imposible desde el panel
+ * y el operador quedaría sin salida. La deuda del catálogo se salda con
+ * scripts/backfillPpum.js, no dejando la bodega sin poder trabajar.
+ */
+const exigirPpumParaPublicar = ({ is_active, product_type, ppum, name, yaEstabaActivo = false }) => {
+  if (!is_active) return;
+  if (yaEstabaActivo) return;
+  if (product_type === "box") return; // art. 8° n°1
+  if (ppum?.mode === "exempt") return;
+  if (ppum?.text) return;
+
+  throw new Error(
+    `No se puede publicar "${name}" sin precio por unidad de medida (decreto 38/2024). ` +
+      "Completa el contenido del envase y su unidad, o márcalo como exceptuado indicando el motivo.",
+  );
+};
+
+/**
+ * Campos derivados del PPUM. Devuelve siempre las tres claves para que un
+ * producto que deja de ser calculable (le borraron el contenido, lo marcaron
+ * exceptuado) limpie el valor anterior en vez de arrastrarlo.
+ */
+const derivarPpum = (doc) => {
+  const ppum = ppumDeProducto(doc);
+  return {
+    value: ppum?.valor || 0,
+    unit_label: ppum?.etiqueta || "",
+    text: ppum?.texto || "",
+  };
+};
 
 /**
  * Mantiene `pricing` coherente cuando se actualiza por query (el panel usa
@@ -270,24 +353,79 @@ productSchema.pre("save", function () {
 productSchema.pre("findOneAndUpdate", async function () {
   const update = this.getUpdate() || {};
   const $set = update.$set || update;
-  const toca = ["price", "pack_size", "pack_price", "sale_unit"].some((k) => $set?.[k] !== undefined);
-  if (!toca) return;
 
-  const actual = await this.model.findOne(this.getQuery()).select("price pack_size pack_price sale_unit").lean();
-  const merged = {
-    price: $set.price ?? actual?.price ?? 0,
-    packSize: $set.pack_size ?? actual?.pack_size ?? 0,
-    packPrice: $set.pack_price ?? actual?.pack_price ?? 0,
-    saleUnit: $set.sale_unit ?? actual?.sale_unit ?? "unidad",
-  };
-  const tiers = buildTiers(merged);
-  const minPrice = Math.min(...tiers.map((t) => Number(t.price || 0)));
+  const tocaPrecio = ["price", "pack_size", "pack_price", "sale_unit"].some((k) => $set?.[k] !== undefined);
+  // El PPUM depende además del contenido, del nombre y de la categoría (el
+  // preset del art. 11 se resuelve con ellos), así que su gatillo es más ancho.
+  const tocaPpum = Object.keys($set || {}).some(
+    (k) =>
+      ["price", "name", "unit_content", "category", "subcategory"].includes(k) ||
+      k.startsWith("unit_content.") ||
+      k.startsWith("ppum.") ||
+      k === "ppum",
+  );
+  if (!tocaPrecio && !tocaPpum) return;
+
+  const actual = await this.model
+    .findOne(this.getQuery())
+    .select("price pack_size pack_price sale_unit name unit_content category subcategory ppum is_active product_type")
+    .lean();
 
   const target = update.$set ? update.$set : update;
-  target["pricing.tiers"] = tiers;
-  target["pricing.min_price"] = minPrice;
+
+  if (tocaPrecio) {
+    const tiers = buildTiers({
+      price: $set.price ?? actual?.price ?? 0,
+      packSize: $set.pack_size ?? actual?.pack_size ?? 0,
+      packPrice: $set.pack_price ?? actual?.pack_price ?? 0,
+      saleUnit: $set.sale_unit ?? actual?.sale_unit ?? "unidad",
+    });
+    target["pricing.tiers"] = tiers;
+    target["pricing.min_price"] = Math.min(...tiers.map((t) => Number(t.price || 0)));
+  }
+
+  if (tocaPpum || $set?.is_active !== undefined) {
+    const merged = mergeParaPpum(actual, $set);
+    const derivado = derivarPpum(merged);
+    target["ppum.value"] = derivado.value;
+    target["ppum.unit_label"] = derivado.unit_label;
+    target["ppum.text"] = derivado.text;
+
+    exigirPpumParaPublicar({
+      is_active: $set.is_active ?? actual?.is_active,
+      product_type: $set.product_type ?? actual?.product_type,
+      ppum: { ...merged.ppum, ...derivado },
+      name: merged.name,
+      yaEstabaActivo: Boolean(actual?.is_active),
+    });
+  }
+
   this.setUpdate(update);
 });
+
+/**
+ * Documento resultante del update, solo con lo que el PPUM necesita. Acepta
+ * tanto `{ ppum: {...} }` como la notación de punto `{ "ppum.bulk": true }`,
+ * que es la que usa el panel.
+ */
+const mergeParaPpum = (actual, $set = {}) => {
+  const ppum = { ...(actual?.ppum || {}), ...($set.ppum || {}) };
+  const unitContent = { ...(actual?.unit_content || {}), ...($set.unit_content || {}) };
+
+  for (const [clave, valor] of Object.entries($set)) {
+    if (clave.startsWith("ppum.")) ppum[clave.slice(5)] = valor;
+    if (clave.startsWith("unit_content.")) unitContent[clave.slice(13)] = valor;
+  }
+
+  return {
+    price: $set.price ?? actual?.price ?? 0,
+    name: $set.name ?? actual?.name ?? "",
+    category: $set.category ?? actual?.category,
+    subcategory: $set.subcategory ?? actual?.subcategory,
+    unit_content: unitContent,
+    ppum,
+  };
+};
 
 productSchema.index(
   { sku: 1 },

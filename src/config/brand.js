@@ -24,9 +24,12 @@ export const brand = {
   // ── Identidad ──────────────────────────────────────────────────────────────
   name: env("BRAND_NAME", "Cibox"),
   tagline: env("BRAND_TAGLINE", "Tu supermercado online"),
+  // No promete despacho a domicilio: el sistema solo hace retiro en bodega y
+  // los Términos lo dicen explícitamente. Cuando el despacho exista de verdad,
+  // se cambia acá (o por BRAND_DESCRIPTION) y baja a toda la tienda.
   description: env(
     "BRAND_DESCRIPTION",
-    "Supermercado 100% online: compra desde la web y te lo preparamos y despachamos.",
+    "Supermercado 100% online: compra desde la web y te preparamos el pedido para que lo retires.",
   ),
 
   // ── Datos legales (Chile) ──────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
@@ -267,7 +268,10 @@ export const resetPassword = async (token, newPassword) => {
 
   const user = await User.findOne({
     reset_password_token_hash: tokenHash,
-    is_active: { $ne: false },
+    // Sin mongoose.trusted el sanitizeFilter global lo vuelve
+    // { $eq: { $ne: false } } y castear ese objeto al Boolean is_active tira
+    // CastError: restablecer la contraseña fallaba SIEMPRE con 400.
+    is_active: mongoose.trusted({ $ne: false }),
   }).select(
     "+refresh_token_hashes name email role password_hash reset_password_token_hash reset_password_expires"
   );
@@ -312,7 +316,8 @@ export const verifyEmail = async (token) => {
 
   const user = await User.findOne({
     email_verification_token_hash: tokenHash,
-    is_active: { $ne: false },
+    // Mismo CastError que en resetPassword: verificar el correo nunca funcionó.
+    is_active: mongoose.trusted({ $ne: false }),
   });
 
   if (!user) {

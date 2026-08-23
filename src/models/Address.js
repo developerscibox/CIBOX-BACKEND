@@ -39,8 +39,12 @@ addressSchema.index({ user_id: 1, is_default: -1 });
 addressSchema.pre("save", async function (next) {
   if (this.is_default && this.user_id) {
     try {
+      // mongoose.trusted es obligatorio: config/db.js activa sanitizeFilter
+      // global, que sin esto convierte { $ne } en { $eq: { $ne } } y revienta
+      // al castear el objeto a ObjectId. El error sube por next(err) y hace
+      // fallar el save completo, así que ninguna dirección se puede guardar.
       await this.constructor.updateMany(
-        { user_id: this.user_id, _id: { $ne: this._id }, is_default: true },
+        { user_id: this.user_id, _id: mongoose.trusted({ $ne: this._id }), is_default: true },
         { $set: { is_default: false } }
       );
     } catch (err) {

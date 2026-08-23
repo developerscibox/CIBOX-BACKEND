@@ -4,6 +4,7 @@ import Order from "../models/Order.js";
 import Product from "../models/Product.js";
 import StockMovement from "../models/StockMovement.js";
 import { PAID_STATUSES, MOVEMENT_TYPES } from "../utils/constants.js";
+import { inicioDiaChile, finDiaChile } from "../utils/fechas.js";
 
 // Biblioteca de informes (estilo Defontana N1): kardex valorizado, valorización
 // de inventario, rotación/cobertura, ranking de ventas, márgenes, libro de
@@ -17,12 +18,15 @@ const r0 = (n) => Math.round(Number(n) || 0);
 
 // from/to → Dates. Acepta YYYY-MM-DD (día completo) o ISO con offset.
 // Sin from: `defaultDays` hacia atrás desde `to`. Sin to: ahora.
+// Los YYYY-MM-DD se interpretan como días de CHILE, no del proceso (que corre
+// en UTC): si no, cada reporte pierde la tarde del último día, porque las
+// agregaciones agrupan con timezone: America/Santiago.
 const parseRange = (fromQ, toQ, defaultDays = 30) => {
   const to = toQ
-    ? DAY_RE.test(toQ) ? new Date(`${toQ}T23:59:59.999`) : new Date(toQ)
+    ? DAY_RE.test(toQ) ? finDiaChile(toQ) : new Date(toQ)
     : new Date();
   const from = fromQ
-    ? DAY_RE.test(fromQ) ? new Date(`${fromQ}T00:00:00.000`) : new Date(fromQ)
+    ? DAY_RE.test(fromQ) ? inicioDiaChile(fromQ) : new Date(fromQ)
     : new Date(to.getTime() - defaultDays * 86400000);
   return { from, to };
 };

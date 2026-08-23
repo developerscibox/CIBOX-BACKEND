@@ -174,7 +174,8 @@ export const updateCategory = asyncHandler(async (req, res) => {
   if (updates.slug) {
     const dup = await Category.findOne({
       slug: updates.slug,
-      _id: { $ne: req.params.id },
+      // $ne sin trusted = CastError sobre ObjectId: cambiar el slug fallaba.
+      _id: mongoose.trusted({ $ne: req.params.id }),
     })
       .select("_id")
       .lean();

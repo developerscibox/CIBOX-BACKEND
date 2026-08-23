@@ -63,16 +63,53 @@ const sendOrderCreatedEmail = async ({ order }) => {
   const email = order.customer?.email;
   if (!email) return;
 
-  let text = `Hola ${order.customer.fullName || ""}, tu orden ha sido creada por un total de $${order.total}. Cuando completes el pago te avisaremos.`;
-  let html = `<p>Hola ${order.customer.fullName || ""},</p><p>Tu orden ha sido creada por un total de <strong>$${order.total}</strong>. Cuando completes el pago te avisaremos.</p>`;
+  // El correo llevaba solo el total, pero el checkout y la pantalla de éxito
+  // prometen "un correo con el resumen de tu compra". Se incluyen los productos
+  // y la fecha comprometida de retiro para que el correo cumpla lo prometido.
+  const clp = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("es-CL");
+  const folioCorto = "#" + String(order._id).slice(-6).toUpperCase();
+  const items = Array.isArray(order.items) ? order.items : [];
+  const detalleTxt = items
+    .map((it) => `  · ${it.quantity} × ${it.name} — ${clp(it.subtotal)}`)
+    .join("\n");
+  const detalleHtml = items
+    .map((it) => `<li>${it.quantity} × ${it.name} — <strong>${clp(it.subtotal)}</strong></li>`)
+    .join("");
+  const retiro = order.pickup?.committed_date
+    ? new Intl.DateTimeFormat("es-CL", { dateStyle: "full", timeZone: "America/Santiago" })
+        .format(new Date(order.pickup.committed_date))
+    : null;
+
+  // cash_on_pickup se paga AL RETIRAR: decirle "cuando completes el pago" a
+  // quien va a pagar en el mostrador confunde el flujo.
+  const cierre =
+    order.payment?.method === "cash_on_pickup"
+      ? "Pagas al retirar tu pedido."
+      : "Cuando completes el pago te avisaremos.";
+
+  let text = `Hola ${order.customer.fullName || ""}, recibimos tu pedido ${folioCorto}.\n\n`;
+  if (detalleTxt) text += `Tu pedido:\n${detalleTxt}\n\n`;
+  text += `Total: ${clp(order.total)}\n`;
+  if (retiro) text += `Retiro comprometido: ${retiro}\n`;
+  text += `\n${cierre}`;
+
+  let html = `<p>Hola ${order.customer.fullName || ""},</p><p>Recibimos tu pedido <strong>${folioCorto}</strong>.</p>`;
+  if (detalleHtml) html += `<ul>${detalleHtml}</ul>`;
+  html += `<p>Total: <strong>${clp(order.total)}</strong></p>`;
+  if (retiro) html += `<p>Retiro comprometido: <strong>${retiro}</strong></p>`;
+  html += `<p>${cierre}</p>`;
 
   // Transferencia: incluir datos bancarios (env BANK_TRANSFER_INFO, multilínea),
   // el folio del pedido y la instrucción de subir el comprobante (auditoría H1).
   if (order.payment?.method === "transfer") {
     const folio = "#" + String(order._id).slice(-6).toUpperCase();
+    // Sin BANK_TRANSFER_INFO configurada, el correo salía con el literal
+    // "+56 9 XXXX XXXX" — un teléfono de relleno enviado al cliente real. Esa
+    // variable hoy no está definida en el servidor, así que era el texto que
+    // llegaba siempre. Mejor pedir contacto sin inventar un número.
     const bankInfo =
       String(env.BANK_TRANSFER_INFO || "").trim() ||
-      "Solicita los datos de transferencia por WhatsApp al +56 9 XXXX XXXX";
+      "Responde este correo y te enviamos los datos de transferencia.";
     const bankInfoHtml = bankInfo
       .split("\n")
       .map((l) => l.trim())

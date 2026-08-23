@@ -272,6 +272,10 @@ const rebuildItemsFromCart = async ({ cart, user, session }) => {
       quantity: Number(cartItem.quantity || 0),
       product,
       user,
+      // Respeta el descuento de despensa que ya se mostró en el carrito. Sin
+      // esto el precio se recalculaba de lista y el cobro no coincidía con lo
+      // que el cliente aceptó en el checkout.
+      fromPantry: Boolean(cart?.from_pantry),
     });
 
     // Liberar PRIMERO el reserved de esta línea (Fase 1) y LUEGO comprometer
@@ -1026,11 +1030,33 @@ export const deleteOrder = async ({ orderId, by = null }) => {
     // "como si nunca hubiera existido" (misma mecánica idempotente que cancelar).
     if (!order.stock_restored) {
       if (order.stock_committed) {
-        // El físico ya salió en el pick → reponer físico.
+        // El físico ya salió en el pick → reponer solo lo que realmente salió
+        // (los faltantes nunca estuvieron en el estante, ver cancelOrder).
+        const realPorProducto = new Map(
+          planDeDespacho(order.items, order.faltantes).map((p) => [String(p.product_id), p.real]),
+        );
+        const stockAfterMap = new Map();
         for (const item of order.items) {
           if (!item.product_id) continue;
-          await restoreStock({ productId: item.product_id, quantity: item.quantity }, session);
+          const cantidad = realPorProducto.get(String(item.product_id)) ?? item.quantity;
+          if (!(cantidad > 0)) continue;
+          const restored = await restoreStock({ productId: item.product_id, quantity: cantidad }, session);
+          if (restored) stockAfterMap.set(String(item.product_id), restored.stock);
         }
+        // Esta reposición NO dejaba rastro en el kardex: el stock subía y no
+        // había movimiento que explicara de dónde salieron esas unidades.
+        await logOrderStockMovements(
+          {
+            order,
+            type: MOVEMENT_TYPES.CANCELLATION,
+            sign: 1,
+            reason: "Reposición por eliminación del pedido",
+            by: by || { label: "admin" },
+            stockAfterMap,
+            qtyMap: realPorProducto,
+          },
+          session,
+        );
       } else {
         // Aún comprometido (sin pick) → liberar allocated.
         for (const item of order.items) {
@@ -1046,7 +1072,15 @@ export const deleteOrder = async ({ orderId, by = null }) => {
     // Limpiar referencias para no dejar huérfanos y borrar el pedido (misma tx).
     await Refund.deleteMany({ order_id: order._id }).session(session);
     await CouponUsage.deleteMany({ order_id: order._id }).session(session);
-    await StockMovement.deleteMany({ order_id: order._id }).session(session);
+    // Los StockMovement NO se borran a propósito.
+    //
+    // Antes se hacía deleteMany aquí y desaparecían del kardex todos los
+    // movimientos de venta, anulación y reembolso del pedido — mientras la
+    // pantalla Kardex le afirma al usuario que "cada movimiento se escribe en la
+    // misma transacción que el cambio de stock, así kardex y stock nunca se
+    // desincronizan". Un libro de inventario del que se borran filas deja de
+    // servir para cuadrar nada. Los movimientos quedan con su order_id
+    // apuntando a un pedido que ya no existe, que es exactamente lo que pasó.
     await TaxDocument.deleteMany({ order_id: order._id }).session(session);
     await Order.deleteOne({ _id: order._id }).session(session);
 
@@ -1090,6 +1124,26 @@ export const cancelOrder = async ({
       );
     }
 
+    // El CLIENTE solo puede cancelar mientras la orden esté pendiente de pago.
+    //
+    // POR QUÉ: la tabla de transiciones permite cancelar desde paid, preparing y
+    // ready porque el ADMIN sí necesita poder hacerlo. Pero por la ruta pública
+    // POST /orders/:id/cancel esa misma puerta dejaba que el dueño de un pedido
+    // ya cobrado lo anulara solo: se reponía el stock (con la caja quizá ya
+    // armada en bodega), se revertía el cupón y el pago quedaba marcado como
+    // "rechazado" SIN crear ningún reembolso ni tocar el banco. Como "cancelled"
+    // es terminal, después el cliente ni siquiera podía pedir la devolución por
+    // el canal normal, y la boleta emitida quedaba apuntando a un pedido anulado.
+    //
+    // Para cancelar algo ya pagado el camino es la solicitud de reembolso, que
+    // sí devuelve la plata y deja registro.
+    if (!byAdmin && order.status !== ORDER_STATUS.PENDING) {
+      throw new ConflictError(
+        "Tu pedido ya fue pagado y no se puede anular desde aquí. " +
+          "Escríbenos para solicitar la devolución.",
+      );
+    }
+
     const wasPaid = PAID_STATUSES.includes(order.status);
 
     // El stock se descuenta al CREAR la orden (pending incluido), por lo que
@@ -1099,11 +1153,20 @@ export const cancelOrder = async ({
     if (!order.stock_restored) {
       if (order.stock_committed) {
         // El físico ya salió en el pick: reponer físico + kardex.
+        //
+        // Se repone lo que REALMENTE salió, no lo pedido. Si hubo faltantes,
+        // esas unidades nunca estuvieron en el estante —su físico ya se ajustó
+        // al reportarlas—, así que devolverlas acá reintroduce mercadería
+        // fantasma y deja el stock por encima de la realidad.
+        const planRestitucion = planDeDespacho(order.items, order.faltantes);
+        const realPorProducto = new Map(planRestitucion.map((p) => [String(p.product_id), p.real]));
         const stockAfterMap = new Map();
         for (const item of order.items) {
           if (!item.product_id) continue;
+          const cantidad = realPorProducto.get(String(item.product_id)) ?? item.quantity;
+          if (!(cantidad > 0)) continue;
           const restored = await restoreStock(
-            { productId: item.product_id, quantity: item.quantity },
+            { productId: item.product_id, quantity: cantidad },
             session,
           );
           if (restored) stockAfterMap.set(String(item.product_id), restored.stock);
@@ -1116,6 +1179,7 @@ export const cancelOrder = async ({
             reason: String(reason || "").trim() || "Cancelación de orden",
             by: by || { label: byAdmin ? "admin" : "cliente" },
             stockAfterMap,
+            qtyMap: realPorProducto,
           },
           session,
         );
@@ -1189,11 +1253,18 @@ export const refundOrder = async ({
     // libera allocated sin kardex.
     if (!order.stock_restored) {
       if (order.stock_committed) {
+        // Igual que en cancelOrder: se repone lo que salió del estante, no lo
+        // pedido, o los faltantes vuelven al stock como mercadería fantasma.
+        const realPorProducto = new Map(
+          planDeDespacho(order.items, order.faltantes).map((p) => [String(p.product_id), p.real]),
+        );
         const stockAfterMap = new Map();
         for (const item of order.items) {
           if (!item.product_id) continue;
+          const cantidad = realPorProducto.get(String(item.product_id)) ?? item.quantity;
+          if (!(cantidad > 0)) continue;
           const restored = await restoreStock(
-            { productId: item.product_id, quantity: item.quantity },
+            { productId: item.product_id, quantity: cantidad },
             session,
           );
           if (restored) stockAfterMap.set(String(item.product_id), restored.stock);
@@ -1206,6 +1277,7 @@ export const refundOrder = async ({
             reason: String(reason || "").trim() || "Reembolso de orden",
             by: by || { label: byAdmin ? "admin" : "cliente" },
             stockAfterMap,
+            qtyMap: realPorProducto,
           },
           session,
         );
@@ -1320,6 +1392,10 @@ export const commitOrderPick = async ({
         }
       }
       order.stock_committed = true;
+      // El kardex anota lo que REALMENTE salió del estante (plan de despacho),
+      // no lo pedido: las unidades faltantes ya tienen su movimiento de ajuste
+      // desde registrarFaltante, y contarlas otra vez descuadra el libro.
+      const qtyMap = new Map(plan.map((p) => [String(p.product_id), p.real]));
       await logOrderStockMovements(
         {
           order,
@@ -1328,6 +1404,7 @@ export const commitOrderPick = async ({
           reason: "Salida por pick confirmado",
           by: by || { label: "bodega" },
           stockAfterMap,
+          qtyMap,
         },
         session,
       );

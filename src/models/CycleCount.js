@@ -25,6 +25,12 @@ const cycleCountLineSchema = new mongoose.Schema(
     theoretical_qty: { type: Number, default: 0 }, // snapshot de Product.stock al iniciar
     counted_qty: { type: Number, default: null, min: 0 }, // ingresado (null = sin contar)
     counted: { type: Boolean, default: false }, // true cuando se ingresó cantidad
+    // Stock que el sistema tenía en el INSTANTE en que se contó esta línea, y
+    // cuándo fue. Con esto el cierre puede aplicar la discrepancia detectada
+    // (contado − stock de ese momento) en vez de forzar el stock al valor
+    // contado, que revertía todas las ventas ocurridas mientras se contaba.
+    stock_at_count: { type: Number, default: null },
+    counted_at: { type: Date, default: null },
   },
   { _id: false },
 );

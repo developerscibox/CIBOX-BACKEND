@@ -90,14 +90,40 @@ export const registrarFaltante = async ({ orderId, productId, qtyReal = 0, motiv
   const item = (order.items || []).find((it) => String(it.product_id) === pid);
   const esperado = item ? item.quantity || 0 : 0;
   const real = Math.max(0, Math.round(Number(qtyReal) || 0));
-  const faltan = Math.max(0, esperado - real);
-  if (faltan > 0 && item) {
+
+  // Reportar dos veces el mismo faltante NO puede descontar dos veces.
+  //
+  // ANTES se calculaba faltan = esperado − real contra la cantidad ORIGINAL del
+  // pedido en cada llamada, sin mirar si ya había un faltante para ese producto,
+  // y se hacía push de otra entrada al arreglo. Como planDeDespacho se queda
+  // solo con el ÚLTIMO qty_real, los descuentos anteriores nunca se compensaban:
+  // el stock bajaba de más en silencio, y el botón "Falta" del panel sigue
+  // habilitado después de reportar, así que era fácil de gatillar.
+  //
+  // Ahora se ajusta solo la DIFERENCIA contra lo ya registrado, y la entrada del
+  // producto se reemplaza en vez de acumularse. Con eso reportar el mismo valor
+  // dos veces no mueve nada, y corregir el valor hacia arriba devuelve stock.
+  const previo = (order.faltantes || []).find((f) => String(f.product_id) === pid);
+  const realPrevio = previo ? Math.max(0, Number(previo.qty_real) || 0) : esperado;
+  const ajusteYaAplicado = Math.max(0, esperado - realPrevio);
+  const ajusteCorrecto = Math.max(0, esperado - real);
+  const delta = ajusteYaAplicado - ajusteCorrecto; // negativo = hay que descontar más
+
+  if (delta !== 0 && item) {
     // Ajuste de inventario: el estante tenía menos de lo que el sistema creía.
     try {
-      await adjustStock({ productId: item.product_id, delta: -faltan, reason: `Faltante preparación #${String(order._id).slice(-6)}: ${motivo || "sin detalle"}`, by });
+      await adjustStock({ productId: item.product_id, delta, reason: `Faltante preparación #${String(order._id).slice(-6)}: ${motivo || "sin detalle"}`, by });
     } catch { /* el ajuste no debe romper el registro del faltante */ }
   }
-  order.faltantes.push({ product_id: pid, name: item?.name || "", qty_real: real, motivo: String(motivo || ""), by: by?.label || "preparación", at: new Date() });
+
+  const entrada = { product_id: pid, name: item?.name || "", qty_real: real, motivo: String(motivo || ""), by: by?.label || "preparación", at: new Date() };
+  if (previo) {
+    order.faltantes = (order.faltantes || []).map((f) =>
+      String(f.product_id) === pid ? entrada : f,
+    );
+  } else {
+    order.faltantes.push(entrada);
+  }
   order.needs_review = true;
   const prog = new Set((order.pick_progress || []).map(String)); prog.add(pid); // resuelto → permite seguir
   order.pick_progress = [...prog];

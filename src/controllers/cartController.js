@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Cart from "../models/Cart.js";
 import Product from "../models/Product.js";
 import Reservation from "../models/Reservation.js";
@@ -12,6 +13,7 @@ import {
   NotFoundError,
 } from "../utils/errors.js";
 import { calculateItemPricing, getBoxQty } from "../services/pricingService.js";
+import { ppumDeProducto } from "../catalogo/ppum.js";
 import {
   reserveStockAtomic,
   releaseReserved,
@@ -62,6 +64,7 @@ const buildCartItem = ({ product, quantity, user }) => {
     unit_price: pricing.unit_price,
     subtotal: pricing.subtotal,
     tier_label: pricing.tier_label,
+    ppum_label: ppumDeProducto(product?.toObject?.() ?? product, pricing.unit_price)?.texto || "",
     box_qty: boxQty,
     product_type:
       product.product_type === "box" ? "box" : "individual",
@@ -164,7 +167,10 @@ const lazyReleaseExpired = async (cart) => {
     const expired = await Reservation.find({
       cart_id: cart._id,
       status: "active",
-      expires_at: { $lt: new Date() },
+      // El $lt sin trusted tiraba CastError sobre el path Date. El catch de
+      // más abajo se lo tragaba dejando solo un warning, así que esta función
+      // devolvía siempre un Set vacío: la liberación en caliente nunca corrió.
+      expires_at: mongoose.trusted({ $lt: new Date() }),
     })
       .select("_id product_id quantity")
       .lean();

@@ -71,14 +71,25 @@ export const logMovement = async (
  * stockAfterMap: Map<productIdString, stockDespuésDelMovimiento> (opcional).
  */
 export const logOrderStockMovements = async (
-  { order, type, sign, reason = null, by = null, stockAfterMap = null },
+  { order, type, sign, reason = null, by = null, stockAfterMap = null, qtyMap = null },
   session
 ) => {
   if (!order || !Array.isArray(order.items)) return;
 
   for (const item of order.items) {
     if (!item.product_id) continue;
-    const qty = Number(item.quantity || 0);
+    // qtyMap: cantidades REALMENTE movidas por producto. Sin él se usa la
+    // cantidad pedida, que es correcta cuando no hubo faltantes.
+    //
+    // POR QUÉ EXISTE: cuando un pedido tiene faltantes, del estante sale menos
+    // de lo pedido, pero el kardex anotaba la cantidad pedida igual. Como las
+    // unidades faltantes ya generaron su propio movimiento de ajuste al
+    // reportarse, el libro terminaba sumando más de lo que se movió — y la
+    // propia fila era incoherente, porque decía −10 mientras su stock_after
+    // mostraba que el stock solo había bajado 6.
+    const qty = qtyMap
+      ? Number(qtyMap.get(String(item.product_id)) ?? item.quantity ?? 0)
+      : Number(item.quantity || 0);
     if (qty <= 0) continue;
 
     await logMovement(

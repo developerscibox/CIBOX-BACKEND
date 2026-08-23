@@ -5,6 +5,7 @@ import Product from "../models/Product.js";
 import Batch from "../models/Batch.js";
 import StockMovement from "../models/StockMovement.js";
 import { ORDER_STATUS, PAID_STATUSES, MOVEMENT_TYPES } from "../utils/constants.js";
+import { ymdChile, inicioDiaChile, finDiaChile } from "../utils/fechas.js";
 
 // Dashboard Gerencial 360°: GET /gerencia/dashboard360. Foto ejecutiva del DÍA +
 // mes calendario en un solo endpoint. Todo son datos REALES derivados de
@@ -26,12 +27,16 @@ const r0 = (n) => Math.round(Number(n) || 0);
 const r1 = (n) => Math.round((Number(n) || 0) * 10) / 10;
 const TZ = "America/Santiago"; // agregaciones por día en hora chilena, no UTC
 
-// YYYY-MM-DD en hora LOCAL del servidor (coherente con los límites de día
-// new Date("YYYY-MM-DDT00:00:00.000"), que también son locales).
-const ymdLocal = (d) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const dayStart = (ymd) => new Date(`${ymd}T00:00:00.000`);
-const dayEnd = (ymd) => new Date(`${ymd}T23:59:59.999`);
+// Fechas y límites de día en hora de CHILE, no del proceso.
+//
+// El servidor corre en UTC y las agregaciones agrupan con timezone: TZ, así que
+// calcular "hoy" con getFullYear/getMonth/getDate daba la fecha UTC y desde las
+// 20:00 de Chile dejaba de coincidir con las claves del diccionario: el tablero
+// mostraba "Ventas del día $0" y "−100% vs ayer" en las horas de mayor venta.
+const ymdLocal = (d) => ymdChile(d);
+const dayStart = (ymd) => inicioDiaChile(ymd);
+const dayEnd = (ymd) => finDiaChile(ymd);
+const ymdEnChile = (d) => ymdChile(d);
 
 // Mismo criterio que /gerencia: "vendido" = pedidos en estado pagado o posterior,
 // por fecha de creación del pedido.
@@ -92,6 +97,7 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
     units30Agg,
     comprasAgg,
     deliveredHoy,
+    ultimaVentaDoc,
   ] = await Promise.all([
     // Venta por día, últimos 12 días (cubre hoy/ayer + sparkVentas). Mismo criterio que /gerencia.
     Order.aggregate([
@@ -223,6 +229,11 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
     // Entregados HOY con historial → tiempos del día, SLA y productividad de preparación.
     Order.find({ status: ORDER_STATUS.DELIVERED, delivered_at: mongoose.trusted({ $gte: hoy0, $lte: hoy1 }) })
       .select("total created_at delivered_at status_history").lean(),
+    // Fecha de la última venta, sin límite de rango. El panel la usa para
+    // explicar un mes en cero: "no hay ventas en agosto" y "el sistema no
+    // registra ventas" se ven idénticos en pantalla, y son cosas distintas.
+    Order.findOne({ status: mongoose.trusted({ $in: PAID_STATUSES }) })
+      .sort({ created_at: -1 }).select("created_at").lean(),
   ]);
 
   // ── KPIs del día ──
@@ -296,7 +307,14 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
   ).map((c) => ({ nombre: c.nombre, monto: c.monto, pct: stockValorizado ? Math.round((c.monto / stockValorizado) * 100) : 0 }));
 
   const units30 = units30Agg[0]?.unidades || 0;
-  const coberturaDias = units30 > 0 ? Math.round(stockUnidades / (units30 / 30)) : null; // null: sin ventas 30d
+  // Cobertura = cuántos días dura el stock al ritmo de venta de los últimos 30
+  // días. Con venta casi nula el cociente explota (1 unidad vendida sobre 19 mil
+  // en bodega daba "570.570 días" = 1.563 años en pantalla). Ese número no es
+  // información: es una división por casi cero. Sobre 2 años se manda null y el
+  // panel dice que no hay venta suficiente para estimarla.
+  const COBERTURA_MAX_DIAS = 730;
+  const coberturaCruda = units30 > 0 ? Math.round(stockUnidades / (units30 / 30)) : null;
+  const coberturaDias = coberturaCruda != null && coberturaCruda <= COBERTURA_MAX_DIAS ? coberturaCruda : null;
 
   // ── Ventas del mes ──
   const mesTot = mesAgg[0]?.totals?.[0] || {};
@@ -314,6 +332,13 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
   const ventasMes = {
     total: totalMes,
     prevTotal: r0(prevTot.total),
+    // YYYY-MM-DD de la última venta registrada (null si nunca hubo). Solo la
+    // ocupa la tarjeta cuando el mes va en cero, para decir desde cuándo.
+    // En hora de Chile, NO la del proceso: el servidor corre en UTC y una venta
+    // de las 20:00 en Chile cae al día siguiente en UTC. El resto del panel
+    // agrupa con timezone: TZ, así que esto tiene que hacer lo mismo o la fecha
+    // que se muestra no coincide con el día que aparece en el gráfico.
+    ultimaVenta: ultimaVentaDoc?.created_at ? ymdEnChile(ultimaVentaDoc.created_at) : null,
     serie: (mesAgg[0]?.porDia || []).map((d) => ({ dia: d._id, monto: r0(d.monto) })),
     topProductos: [...itemsMes].sort((a, b) => b.revenue - a.revenue).slice(0, 5).map((x) => ({ nombre: x.nombre, monto: x.revenue })),
   };
@@ -408,13 +433,33 @@ export const getDashboard360 = asyncHandler(async (req, res) => {
     catAgg[x.categoria].cost += x.costo;
   });
   const mermaMes = r0(mermaAgg[0]?.total); // 0 si no hubo mermas en el mes
+  // Sin costos cargados, cogsMes es 0 y el "margen bruto" termina siendo la
+  // venta completa (100% de margen). Mismo criterio que /gerencia: sin costo
+  // real, va null y el panel dice que falta el dato en vez de mostrar una cifra
+  // creíble y falsa. Sin ventas del mes tampoco hay margen que informar.
+  // Igual que /gerencia: no basta con que exista algún costo. Se compara el
+  // ingreso de los productos CON costo contra su propio costo, y se exige que
+  // cubran la mayor parte del mes; si no, un único producto con costo cargado
+  // publicaría un margen cercano al 100% como si fuera la cifra del negocio.
+  const ingresoConCostoMes = itemsMes.reduce((a, x) => a + (x.costo > 0 ? x.revenue : 0), 0);
+  const ingresoItemsMes = itemsMes.reduce((a, x) => a + x.revenue, 0);
+  const coberturaMes = ingresoItemsMes > 0 ? ingresoConCostoMes / ingresoItemsMes : 0;
+  const hayCostoMes = cogsMes > 0 && coberturaMes >= 0.8;
+  const margenConCostoMes = ingresoConCostoMes - cogsMes;
   const rentabilidad = {
-    margenBruto: r0(margenBruto),
-    margenPct: totalMes ? Math.round((margenBruto / totalMes) * 100) : null,
+    margenBruto: hayCostoMes ? r0(margenConCostoMes) : null,
+    // Sobre el ingreso de los productos con costo, no sobre totalMes: ese total
+    // incluye el flete, así que subir la tarifa de despacho "mejoraba" el margen.
+    margenPct:
+      hayCostoMes && ingresoConCostoMes > 0
+        ? Math.round((margenConCostoMes / ingresoConCostoMes) * 100)
+        : null,
     mermaMes,
     capitalInmovilizado: stockValorizado,
-    ticket: pedidosMes ? r0(totalMes / pedidosMes) : 0,
-    ticketPrev: prevTot.count ? r0(prevTot.total / prevTot.count) : 0,
+    // null (no 0) sin pedidos: "$0 de ticket promedio" se lee como una venta
+    // promedio de cero, cuando lo que pasa es que no hubo ninguna venta.
+    ticket: pedidosMes ? r0(totalMes / pedidosMes) : null,
+    ticketPrev: prevTot.count ? r0(prevTot.total / prevTot.count) : null,
     margenPorCategoria: Object.entries(catAgg)
       .map(([nombre, v]) => ({ nombre, pct: pctMargen(v.rev, v.cost) }))
       .sort((a, b) => b.pct - a.pct)

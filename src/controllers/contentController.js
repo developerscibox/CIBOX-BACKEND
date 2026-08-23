@@ -23,9 +23,12 @@ export const SPECS = {
     nombre: "Banner principal (hero)",
     descripcion:
       "Imagen grande de bienvenida con título, bajada y botón de acción. Es lo primero que ve el cliente.",
-    tamano: "1600×500 px (web) · se recorta a 16:9 en móvil",
-    ratio_web: "16:5",
-    ratio_movil: "16:9",
+    // El hero se dibuja con aspectRatio 2 fijo (HomeScreen), igual en web que en
+    // móvil: pedir un arte más apaisado hacía que 'cover' recortara ~37% del
+    // ancho y se comiera el logo. La spec dice lo que el cliente realmente ve.
+    tamano: "1600×800 px (2:1)",
+    ratio_web: "2:1",
+    ratio_movil: "2:1",
     campos: {
       title: { max: 60 },
       subtitle: { max: 120 },
@@ -35,7 +38,8 @@ export const SPECS = {
   },
   banner_1: {
     nombre: "Banner secundario 1",
-    descripcion: "Franja promocional bajo el hero. Ideal para ofertas o liquidación.",
+    descripcion:
+      "Franja promocional bajo el hero. Ideal para ofertas o liquidación. En celular se ve solo la mitad central de la imagen: pon lo importante al centro.",
     tamano: "1200×300 px",
     ratio_web: "4:1",
     ratio_movil: "2:1",
@@ -43,7 +47,8 @@ export const SPECS = {
   },
   banner_2: {
     nombre: "Banner secundario 2",
-    descripcion: "Segunda franja promocional. Ideal para categorías destacadas.",
+    descripcion:
+      "Segunda franja promocional. Ideal para categorías destacadas. En celular se ve solo la mitad central de la imagen: pon lo importante al centro.",
     tamano: "1200×300 px",
     ratio_web: "4:1",
     ratio_movil: "2:1",
@@ -51,7 +56,8 @@ export const SPECS = {
   },
   banner_3: {
     nombre: "Banner secundario 3",
-    descripcion: "Tercera franja promocional. Ideal para novedades o temporada.",
+    descripcion:
+      "Tercera franja promocional. Ideal para novedades o temporada. En celular se ve solo la mitad central de la imagen: pon lo importante al centro.",
     tamano: "1200×300 px",
     ratio_web: "4:1",
     ratio_movil: "2:1",
