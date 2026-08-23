@@ -223,6 +223,10 @@ const magnitudTotal = ({ contenido, unidad, contenidoDrenado, piezas, largoPorPi
  * normalizados (minúsculas, sin tildes).
  */
 export const PRESET_POR_CATEGORIA = {
+  // El art. 7 razona por tipo de producto, asi que la categoria manda sobre el
+  // nombre: toda "Condimentos y especias" sale por 10 g y se puede comparar.
+  "condimentos y especias": "especias",
+  "hierbas y especias": "especias",
   "cuidado personal": "cosmeticos",
   "higiene personal": "cosmeticos",
   "belleza": "cosmeticos",
@@ -239,7 +243,11 @@ const REGLAS_POR_NOMBRE = [
   [/\bhuevos?\b/, "huevos"],
   [/caldo\s*(en\s*polvo|deshidratado)|sopa\s*en\s*polvo|salsa\s*en\s*polvo/, "salsa_polvo"],
   [/colorante\s*(alimentario)?|esencia\s*(de|aromatica)/, "esencias"],
-  [/\boregano\b|\bcomino\b|\bpaprika\b|\bcurcuma\b|\balbahaca\b|\bromero\b|\btomillo\b|\bpimienta\b|\bcanela\b|\bajo\s*en\s*polvo\b|especias?/, "especias"],
+  // Anclado al INICIO del nombre a proposito: "OREGANO MOLIDO K" es oregano,
+  // pero "QUESO EDAM OREGANO 325G" es un queso y "SALSA UNTAR AJO OREGANO" una
+  // salsa. Sin el ancla, el queso salia a "$185 por 10 g" mientras el resto de
+  // su categoria salia por kilo: justo la comparacion que el art. 7 prohibe.
+  [/^(oregano|comino|paprika|curcuma|albahaca|romero|tomillo|laurel|pimienta|canela|clavo\s*de\s*olor|nuez\s*moscada|ajo\s*en\s*polvo|cilantro\s*seco|perejil\s*seco|merken)\b/, "especias"],
 ];
 
 const sinTildes = (texto) =>

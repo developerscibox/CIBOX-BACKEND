@@ -46,6 +46,10 @@ const UNIDADES = [
   [/^(KGS?|KILOS?|KLS?|K)$/, "kg"],
   [/^(GRS?|GRAMOS?|G)$/, "g"],
   [/^MG$/, "mg"],
+  // Longitud solo la usa el patron NxM de los rollos. Suelta en el nombre,
+  // "25 CM" es el diametro de la tortilla, no su contenido.
+  [/^(MTS?|METROS?|M)$/, "m"],
+  [/^CM$/, "cm"],
   [/^(LTS?|LITROS?|L)$/, "L"],
   [/^(ML|CC)$/, "ml"],
   [/^(UN|U|UNID|UNIDADES?|PZAS?|PIEZAS?)$/, "un"],
@@ -87,6 +91,20 @@ const FORMATO_SUELTO = /(?:^|\s)(KGS?|KL|K|LTS?|L|UN|U)(?:\s|$)/i;
 export const contenidoDesdeNombre = (nombre) => {
   const texto = String(nombre || "").trim().toUpperCase();
   if (!texto) return null;
+
+  // "6X300M", "4X50MT", "12X500CC": N piezas de M cada una. Acá no hay
+  // ambiguedad — la N y la medida estan pegadas por la X — asi que se
+  // multiplica. Es el formato del papel higienico, que el art. 11 n°5 obliga a
+  // informar por metro, y sin esta regla quedaban todos sin PPUM.
+  const nxm = texto.match(/(\d+)\s*X\s*(\d+(?:[.,]\d+)?)\s*(KGS?|GRS?|G|MG|LTS?|L|ML|CC|MTS?|M|CM)(?![A-Z])/);
+  if (nxm) {
+    const piezas = Number(nxm[1]);
+    const porPieza = Number(String(nxm[2]).replace(",", "."));
+    const unit = unidadCanonica(nxm[3]);
+    if (piezas > 0 && porPieza > 0 && unit) {
+      return { value: piezas * porPieza, unit, origen: `${piezas} x ${porPieza} ${unit}` };
+    }
+  }
 
   const encontrados = [];
   for (const m of texto.matchAll(MEDIDA)) {
@@ -133,6 +151,12 @@ const precioDeTramos = (producto) => {
 };
 
 // ── Ejecución ────────────────────────────────────────────────────────────────
+// Solo corre cuando se invoca como script. Así los tests pueden importar el
+// parser sin abrir una conexión a Mongo.
+const invocadoDirecto = String(process.argv[1] || "").split("\\").join("/").endsWith("scripts/backfillPpum.js");
+if (!invocadoDirecto) {
+  // eslint-disable-next-line no-undef
+} else {
 
 await mongoose.connect(MONGO_URI);
 console.log(`✅  Conectado${aplicar ? "" : "  (simulación: no se escribe nada)"}`);
@@ -237,3 +261,4 @@ if (sinDatos.length) {
 if (!aplicar) console.log("\nℹ️   Simulación. Corre con --aplicar para escribir.");
 
 await mongoose.disconnect();
+}

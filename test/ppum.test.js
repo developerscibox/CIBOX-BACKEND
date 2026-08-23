@@ -279,3 +279,16 @@ test("el PPUM se recalcula sobre el precio realmente cobrado", () => {
   assert.equal(ppumDeProducto(producto)?.texto, "$6.357 por kg");
   assert.equal(ppumDeProducto(producto, 782)?.texto, "$5.586 por kg");
 });
+
+test("una hierba en el nombre no convierte al producto en especia", () => {
+  // El orégano del queso es un sabor, no el producto. Si se tratara como
+  // especia, el queso saldría por 10 g y el resto de los quesos por kilo.
+  assert.equal(resolverPreset({ nombre: "QUESO EDAM OREGANO QUILLAYES 325G", categoria: "Lácteos, Huevos" }), "");
+  assert.equal(resolverPreset({ nombre: "SALSA UNTAR AJO OREGANO GOURMET 200G", categoria: "Salsas" }), "");
+  assert.equal(resolverPreset({ nombre: "OREGANO MOLIDO K", categoria: "Condimentos y especias" }), "especias");
+});
+
+test("la categoría de condimentos deja a todos sus productos en la misma unidad", () => {
+  assert.equal(resolverPreset({ nombre: "ALIÑO COMPLETO K", categoria: "Condimentos y especias" }), "especias");
+  assert.equal(resolverPreset({ nombre: "MERKEN AHUMADO 80G", categoria: "Condimentos y especias" }), "especias");
+});
