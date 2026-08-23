@@ -123,7 +123,7 @@ export const createFromCart = asyncHandler(async (req, res) => {
     couponCode,
   });
 
-  await sendOrderCreatedEmail({ order: result.order });
+  sendOrderCreatedEmail({ order: result.order }).catch(() => {});
 
   return res.status(201).json({
     success: true,

@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Cart from "../models/Cart.js";
 import Product from "../models/Product.js";
 import Reservation from "../models/Reservation.js";
@@ -164,7 +165,7 @@ const lazyReleaseExpired = async (cart) => {
     const expired = await Reservation.find({
       cart_id: cart._id,
       status: "active",
-      expires_at: { $lt: new Date() },
+      expires_at: mongoose.trusted({ $lt: new Date() }),
     })
       .select("_id product_id quantity")
       .lean();
