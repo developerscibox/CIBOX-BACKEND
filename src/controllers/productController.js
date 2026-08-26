@@ -1050,7 +1050,11 @@ export const getFeaturedProducts = async (req, res) => {
       // sin filtros— por el $expr que había aquí: con `sanitizeFilter` activo
       // (config/db.js) Mongoose lo rechaza aunque venga envuelto en trusted().
       // La home pedía destacados y no recibía ninguno.
-      stock: { $gt: 0 },
+      //
+      // El operador va envuelto en su PROPIO trusted(), no basta con marcar el
+      // objeto padre: Mongoose intenta castear { $gt: 0 } como si fuera el valor
+      // literal de `stock` (un número) y responde "ID inválido para stock".
+      stock: mongoose.trusted({ $gt: 0 }),
     }),
   )
     .sort({
