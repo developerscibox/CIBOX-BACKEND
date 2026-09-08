@@ -12,11 +12,11 @@
     "start": "node server.js",
     "lint": "eslint src",
     "test": "node --test test/*.test.js",
-      "migrate:wp-images": "node src/scripts/migrateWpImagesToCloudinary.js",
-      "backfill:stock-committed": "node src/scripts/backfillStockCommitted.js",
-      "migrate:categories": "node scripts/migrateProductCategories.js",
-      "migrate:search": "node scripts/migrateSearchNames.js",
-      "migrate:catalogo": "node scripts/migrateCatalogoSupermercado.js"
+    "migrate:wp-images": "node src/scripts/migrateWpImagesToCloudinary.js",
+    "backfill:stock-committed": "node src/scripts/backfillStockCommitted.js",
+    "migrate:categories": "node scripts/migrateProductCategories.js",
+    "migrate:search": "node scripts/migrateSearchNames.js",
+    "migrate:catalogo": "node scripts/migrateCatalogoSupermercado.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.650.0",
@@ -34,6 +34,7 @@
     "nodemailer": "^8.0.5",
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",
+    "resend": "^5.0.0",
     "transbank-sdk": "^6.1.1",
     "zod": "^3.23.8"
   },

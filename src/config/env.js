@@ -55,6 +55,26 @@ const envSchema = z.object({
   EMAIL_PASS: z.string().default(""),
   EMAIL_FROM: z.string().default("Cibox <no-reply@cibox.cl>"),
 
+  // El droplet de DigitalOcean tiene bloqueados los puertos SMTP salientes
+  // (25, 465 y 587) por su política antispam: comprobado abriendo sockets a
+  // Gmail, los tres dan timeout. Por eso en producción el correo sale por
+  // HTTPS/443 a través de Resend, y estas variables son las que lo habilitan.
+  // Ojo: este esquema Zod es "strip", así que toda variable que no esté
+  // declarada AQUÍ se descarta aunque exista en el .env del servidor.
+  RESEND_API_KEY: z.string().default(""),
+  // Remitente aparte del EMAIL_FROM porque mientras Resend esté en sandbox
+  // obliga a usar onboarding@resend.dev. Cuando cibox.cl quede verificado en
+  // resend.com/domains se borra esta línea del .env y vuelve a mandar EMAIL_FROM.
+  RESEND_FROM: z.string().default(""),
+  // Escotilla para forzar una vía concreta en pruebas. "auto" elige sola:
+  // Resend si hay clave, si no SMTP, si no nada.
+  // La línea vacía (EMAIL_TRANSPORT= en el .env) se trata como ausente: un knob
+  // opcional del correo no puede abortar el arranque de todo el backend.
+  EMAIL_TRANSPORT: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.enum(["auto", "resend", "smtp", "off"]).default("auto"),
+  ),
+
   // Datos bancarios (texto multilínea) para el email de pedidos por
   // transferencia. Opcional: sin setear, el email indica pedirlos por WhatsApp.
   BANK_TRANSFER_INFO: z.string().default(""),
@@ -155,6 +175,11 @@ if (parsed.data.TRACKING_PROVIDER && parsed.data.TRACKING_PROVIDER !== "log") {
 }
 if (parsed.data.EMAIL_HOST && (!parsed.data.EMAIL_USER || !parsed.data.EMAIL_PASS)) {
   console.warn("⚠️  EMAIL_HOST configurado pero faltan EMAIL_USER/EMAIL_PASS — el envío de correos fallará.");
+}
+if (isProd && !parsed.data.RESEND_API_KEY && parsed.data.EMAIL_TRANSPORT !== "off") {
+  console.warn(
+    "⚠️  RESEND_API_KEY vacío en producción: el droplet de DigitalOcean tiene bloqueados los puertos SMTP salientes (25/465/587), así que por SMTP no saldrá NINGÚN correo — verificación de cuenta, restablecer contraseña ni avisos de pedido.",
+  );
 }
 
 export const env = {
