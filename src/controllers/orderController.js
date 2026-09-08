@@ -160,6 +160,9 @@ export const createFromCart = asyncHandler(async (req, res) => {
     couponCode,
   });
 
+  // El correo no bloquea la creación del pedido: si el envío falla, el pedido
+  // ya está creado y cobrado, y tumbar la respuesta por eso deja al cliente
+  // sin confirmación de algo que sí ocurrió.
   sendOrderCreatedEmail({ order: result.order }).catch(() => {});
 
   return res.status(201).json({
