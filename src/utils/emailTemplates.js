@@ -24,7 +24,7 @@ const baseLayout = (innerHtml) => `
 const button = (href, label) => `
   <p>
     <a href="${escapeAttr(href)}"
-       style="display:inline-block;padding:12px 20px;background:#4E9B27;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;">
+       style="display:inline-block;padding:12px 20px;background:#004568;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;">
       ${escapeHtml(label)}
     </a>
   </p>
@@ -215,7 +215,7 @@ Gracias por comprar en CIBOX.
     `.trim(),
 
     html: baseLayout(`
-      <h2 style="color:#4E9B27;">Pago confirmado</h2>
+      <h2 style="color:#004568;">Pago confirmado</h2>
 
       <p>Hola <strong>${escapeHtml(customer.fullName || "")}</strong>,</p>
       <p>Tu pago fue confirmado correctamente. Ahora comenzaremos a preparar tu pedido.</p>

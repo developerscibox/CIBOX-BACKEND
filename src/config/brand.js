@@ -91,21 +91,24 @@ export const brand = {
     panel: "/logo-cibox.png",
     tienda: "logo-cibox.png",
   },
+  // Identidad según el Manual de Diseño Digital cibox.cl v1.0: azules de base
+  // —confianza— con el verde lima como acento de acción. El lima nunca se usa
+  // como fondo extenso ni lleva texto blanco encima (rinde 1,9:1).
   colors: {
-    primary: "#4E9B27",       // verde Cibox — botones y CTA
-    primaryLight: "#C3E062",  // lima — fondos destacados
-    primaryDark: "#3E7D1E",   // verde profundo — énfasis, precios
-    accent: "#F7B81C",        // amarillo — badges de descuento
+    primary: "#004568",       // azul Cibox — navegación, titulares
+    primaryLight: "#E8F29A",  // lima rebajado — fondos suaves
+    primaryDark: "#003D49",   // azul navy — pies y fondos profundos
+    accent: "#B6D900",        // verde lima — acciones, precios, badges
     primaryText: "#ffffff",
-    background: "#f7f8f5",
+    background: "#F5F6F7",
     surface: "#ffffff",
-    text: "#111811",
-    muted: "#5f6b5f",
-    border: "#e3e8e0",
+    text: "#17202A",
+    muted: "#5A6672",
+    border: "#E2E6EA",
     ok: "#16794a",
     warn: "#d97706",
     danger: "#b00020",
-    gradient: "linear-gradient(120deg,#3E7D1E 0%,#4E9B27 50%,#C3E062 100%)",
+    gradient: "linear-gradient(120deg,#003D49 0%,#004568 50%,#006996 100%)",
   },
 };
 
