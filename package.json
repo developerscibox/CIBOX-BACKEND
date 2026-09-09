@@ -19,15 +19,15 @@
     "migrate:catalogo": "node scripts/migrateCatalogoSupermercado.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.650.0",
+    "@aws-sdk/client-s3": "^3.1127.0",
     "bcryptjs": "^3.0.3",
-    "cloudinary": "^2.10.0",
+    "cloudinary": "^2.11.0",
     "compression": "^1.7.4",
     "cors": "^2.8.6",
     "dotenv": "^17.4.0",
     "express": "^5.2.1",
     "express-rate-limit": "^7.4.0",
-    "helmet": "^8.0.0",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.3.3",
     "multer": "^2.0.0",
