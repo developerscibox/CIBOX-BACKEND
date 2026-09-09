@@ -83,7 +83,9 @@ app.get("/ready", (req, res) => res.json({ status: "ready" }));
 // el que la encuentra la publica o la vende; con esto, la reporta.
 app.get("/.well-known/security.txt", (req, res) => {
   const lineas = [
-    `Contact: mailto:${brand.contact?.email || "developers@cibox.cl"}`,
+    // El mismo buzón que publica la tienda en su security.txt: un solo
+    // contacto para reportes de seguridad, no el de atención a clientes.
+    "Contact: mailto:developers@cibox.cl",
     "Preferred-Languages: es, en",
     "Canonical: https://api.cibox.cl/.well-known/security.txt",
     `Expires: ${new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()}`,

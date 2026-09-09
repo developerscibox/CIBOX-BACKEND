@@ -288,6 +288,23 @@ export const importBulkRowSchema = z.object({
   target_stock: optionalNumber(z.coerce.number().int().nonnegative()),
   brand: optionalString(100),
   description: optionalString(5000),
+  // Precio por unidad de medida (decreto 38/2024). Son las columnas que ofrece
+  // la plantilla del panel; sin declararlas acá zod las descartaba en silencio
+  // antes de que importPpum() las leyera.
+  drained_value: optionalNumber(z.coerce.number().nonnegative()),
+  pieces_per_pack: optionalNumber(z.coerce.number().int().nonnegative()),
+  length_per_piece_m: optionalNumber(z.coerce.number().nonnegative()),
+  bulk: z.preprocess(
+    (v) => {
+      if (v === "" || v === null || v === undefined) return undefined;
+      const t = String(v).toLowerCase().trim();
+      if (["si", "sí", "true", "1", "s"].includes(t)) return true;
+      if (["no", "false", "0", "n"].includes(t)) return false;
+      return v;
+    },
+    z.boolean().optional(),
+  ),
+  ppum_exempt_reason: optionalString(60),
 });
 
 /**

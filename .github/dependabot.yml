@@ -12,4 +12,3 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
     open-pull-requests-limit: 5
-  - package-ecosystem: npm

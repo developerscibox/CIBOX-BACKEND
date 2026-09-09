@@ -51,7 +51,13 @@ export const readRefreshCookie = (req) => {
     const idx = part.indexOf("=");
     if (idx === -1) continue;
     if (part.slice(0, idx).trim() === name) {
-      return decodeURIComponent(part.slice(idx + 1).trim());
+      // Una cookie manipulada con un % suelto hacía explotar decodeURIComponent
+      // y la petición terminaba en 500. Sin cookie válida corresponde 401.
+      try {
+        return decodeURIComponent(part.slice(idx + 1).trim());
+      } catch {
+        return null;
+      }
     }
   }
   return null;

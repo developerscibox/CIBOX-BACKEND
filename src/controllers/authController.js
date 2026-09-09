@@ -12,12 +12,16 @@ import {
 // WEB dependen EXCLUSIVAMENTE de la cookie httpOnly (cibox_rt): el refresh token no
 // debe viajar por body porque un XSS podría leerlo/exfiltrarlo. Nativo (sin cookie
 // fiable) y dev (cookie cross-origin que no viaja) sí lo reciben por body.
-// En producción, los clientes web (tienda y panel de bodega) reciben el refresh
-// SOLO en la cookie httpOnly; nunca en el body, para que ningún script del
-// origen pueda leerlo. Nativo y desarrollo local siguen recibiéndolo en el body.
-const CLIENTES_WEB = new Set(["web", "panel"]);
+// En producción el refresh viaja en el body SOLO para la app nativa, que se
+// identifica explícitamente (client.js manda Platform.OS: "ios" | "android").
+// Todo lo demás —tienda web, panel, o una petición sin cabecera— lo recibe
+// únicamente en la cookie httpOnly. La regla anterior era al revés ("todo
+// salvo web/panel") y un script inyectado en la tienda podía pedir el refresh
+// omitiendo la cabecera y leerlo del body: la protección dependía de una
+// cabecera que controlaba el mismo cliente al que se quería proteger.
+const CLIENTES_NATIVOS = new Set(["ios", "android"]);
 const exposeRefreshInBody = (req) =>
-  !(env.isProd && CLIENTES_WEB.has(String(req.headers["x-client-platform"] || "")));
+  !env.isProd || CLIENTES_NATIVOS.has(String(req.headers["x-client-platform"] || ""));
 
 export const register = asyncHandler(async (req, res) => {
   const user = await authService.registerUser(req.body);
@@ -58,11 +62,14 @@ export const logout = asyncHandler(async (req, res) => {
 export const refresh = asyncHandler(async (req, res) => {
   const device = req.headers["user-agent"] || null;
   // Preferir la cookie httpOnly; caer al body para clientes/dev sin cookie.
-  const rt = readRefreshCookie(req) || req.body.refreshToken;
+  const desdeCookie = readRefreshCookie(req);
+  const rt = desdeCookie || req.body.refreshToken;
   const tokens = await authService.refreshTokens(rt, device);
   setRefreshCookie(req, res, tokens.refreshToken);
   const data = { ...tokens };
-  if (!exposeRefreshInBody(req)) delete data.refreshToken;
+  // El refresh nuevo vuelve por donde llegó el viejo: si vino en la cookie, no
+  // se devuelve en el body aunque el cliente diga ser nativo.
+  if (desdeCookie || !exposeRefreshInBody(req)) delete data.refreshToken;
   res.status(200).json({
     success: true,
     data,

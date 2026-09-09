@@ -83,7 +83,7 @@ export const buildPaymentApprovedTemplate = ({ order, taxDocument = null }) => {
   const isCustomBox = order.source === "custom_box";
 
   const orderId = String(order._id || order.id || "");
-  const shortOrder = orderId.slice(-8);
+  const shortOrder = String(orderId).slice(-6).toUpperCase();
 
   const taxText = taxDocument
     ? `\nDocumento tributario:\nTipo: ${taxDocument.type || "boleta"}\nFolio: ${taxDocument.folio || "—"}\nEstado: ${taxDocument.status || "—"}\n${taxDocument.stub ? "Modo integración: documento de prueba, no válido tributariamente." : ""}`

@@ -3,6 +3,7 @@ import { normalizeText } from "../utils/text.js";
 import { brand } from "../config/brand.js";
 import { buildTiers } from "../catalogo/precio.js";
 import { ppumDeProducto } from "../catalogo/ppum.js";
+import { UnprocessableError } from "../utils/errors.js";
 
 const DEFAULT_IVA_PCT = brand.legal.iva_pct;
 
@@ -325,7 +326,9 @@ const exigirPpumParaPublicar = ({ is_active, product_type, ppum, name, yaEstabaA
   if (ppum?.mode === "exempt") return;
   if (ppum?.text) return;
 
-  throw new Error(
+  // Error tipado: sin esto el handler lo trataba como fallo interno y el
+  // operador del panel veía un 500 genérico en vez del motivo.
+  throw new UnprocessableError(
     `No se puede publicar "${name}" sin precio por unidad de medida (decreto 38/2024). ` +
       "Completa el contenido del envase y su unidad, o márcalo como exceptuado indicando el motivo.",
   );
@@ -352,7 +355,15 @@ const derivarPpum = (doc) => {
  */
 productSchema.pre("findOneAndUpdate", async function () {
   const update = this.getUpdate() || {};
-  const $set = update.$set || update;
+  // El panel manda el update PLANO ({ price, ppum, ... }, sin $set). El plugin
+  // de timestamps corre antes que este hook y le agrega `$set: { updated_at }`,
+  // así que `update.$set || update` devolvía solo { updated_at } y el hook no
+  // veía el precio ni el contenido: los tramos del carrito quedaban con el
+  // precio viejo y el PPUM sin recalcular. Se miran las dos cosas juntas.
+  const $set = {
+    ...Object.fromEntries(Object.entries(update).filter(([k]) => !k.startsWith("$"))),
+    ...(update.$set || {}),
+  };
 
   const tocaPrecio = ["price", "pack_size", "pack_price", "sale_unit"].some((k) => $set?.[k] !== undefined);
   // El PPUM depende además del contenido, del nombre y de la categoría (el
