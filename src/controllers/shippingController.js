@@ -7,6 +7,7 @@ import { BadRequestError, ConflictError } from "../utils/errors.js";
 import { ORDER_STATUS, PAYMENT_STATUS } from "../utils/constants.js";
 
 import { quoteShippingForOrder } from "../services/shippingService.js";
+import { CARRIER_DESPACHO } from "../config/despacho.js";
 import { findOrderForOwner } from "../services/orderService.js";
 
 /**
@@ -110,13 +111,20 @@ export const applyShippingToOrder = asyncHandler(async (req, res) => {
   if (req.body.region) order.shipping.region = String(req.body.region).trim();
   if (req.body.city) order.shipping.city = String(req.body.city).trim();
 
+  // Si la comuna nueva está fuera de zona, quoteShippingForOrder lanza 400 y no
+  // se guarda nada: este endpoint no puede usarse para mover un pedido ya
+  // creado fuera del área de reparto.
   const quote = quoteShippingForOrder(order);
   const selected = quote.selected;
+
+  // Guardar comuna y región canónicas (las que resolvió la cotización).
+  order.shipping.city = quote.meta.comuna;
+  order.shipping.region = quote.meta.region;
 
   order.shipping.amount = Number(selected.amount || 0);
   order.shipping.service_name = selected.service_name || null;
   order.shipping.service_code = selected.service_code || null;
-  order.shipping.carrier = selected.carrier || "blueexpress_manual";
+  order.shipping.carrier = selected.carrier || CARRIER_DESPACHO;
 
   order.shipping_amount = order.shipping.amount;
 

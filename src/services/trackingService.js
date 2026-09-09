@@ -23,7 +23,10 @@ const hashToken = (token) =>
 
 const matchesGuestToken = (order, token) => {
   if (!token) return false;
-  const stored = order.guest_token_hash || order.guest_tracking_token_hash || null;
+  // Antes esto miraba también `order.guest_tracking_token_hash`, que NO existe en
+  // el esquema: era una rama muerta que solo despistaba. El campo real es
+  // `guest_token_hash`, y viene con `select: false` — hay que pedirlo a mano.
+  const stored = order.guest_token_hash || null;
   if (!stored) return false;
   try {
     const a = Buffer.from(stored);
@@ -35,24 +38,96 @@ const matchesGuestToken = (order, token) => {
   }
 };
 
+/** Cuántos caracteres del _id se le muestran al cliente como "folio". */
+const LARGO_FOLIO = 6;
+
+/** El folio que ve el cliente en la pantalla de compra exitosa y en su correo. */
+const folioDe = (id) => String(id).slice(-LARGO_FOLIO).toUpperCase();
+
 /**
- * Seguimiento que ve el CLIENTE. Sin PII de terceros ni datos internos: el
- * estado, la línea de tiempo del pedido (qué etapa se cumplió, cuándo y quién),
- * el avance y los datos del despacho.
+ * El cliente escribe el folio como se le ocurre: "#A1B2C3", "a1 b2 c3", o pega
+ * el id completo de 24 que ve en la URL de su pedido. Dejamos solo letras y
+ * números en mayúscula y después vemos contra qué calza.
+ */
+const normalizarFolio = (raw) =>
+  String(raw || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+
+/**
+ * El correo se guarda ya normalizado en la base (`customer.email` es
+ * `trim: true, lowercase: true` en el modelo), así que basta con normalizar la
+ * ENTRADA para que el calce funcione incluso con los pedidos históricos.
+ */
+const normalizarEmail = (raw) => String(raw || "").trim().toLowerCase();
+
+/**
+ * Comparación del correo en tiempo constante. Si comparáramos con `===`, el
+ * tiempo de respuesta filtraría cuántos caracteres iniciales acertó quien
+ * prueba, y el endpoint se volvería un oráculo para adivinar correos ajenos.
+ */
+const mismoEmail = (a, b) => {
+  if (!a || !b) return false;
+  const ha = Buffer.from(crypto.createHash("sha256").update(a).digest("hex"));
+  const hb = Buffer.from(crypto.createHash("sha256").update(b).digest("hex"));
+  return crypto.timingSafeEqual(ha, hb);
+};
+
+/**
+ * UN SOLO error, idéntico, para "ese pedido no existe" y para "el correo no
+ * coincide". Es la parte más importante de todo esto: si los mensajes se
+ * distinguieran, cualquiera podría recorrer folios hasta encontrar los válidos y
+ * confirmar de paso el correo de otra persona, sin llegar nunca a ver un pedido.
+ */
+const errorGenerico = () =>
+  new NotFoundError(
+    "No encontramos un pedido con ese número y ese correo. Revisa los dos datos: el correo tiene que ser el mismo con el que hiciste la compra."
+  );
+
+/**
+ * Cuántos pedidos de ese correo se traen para buscar el folio dentro. Se filtra
+ * en memoria porque el folio no es un campo del documento; el tope evita que un
+ * correo con miles de pedidos convierta la consulta en un problema.
+ */
+const MAX_PEDIDOS_POR_CORREO = 100;
+
+/**
+ * Seguimiento que ve el CLIENTE. Sin PII ni datos internos: el estado, la línea
+ * de tiempo del pedido (qué etapa se cumplió y cuándo), el avance, los datos del
+ * despacho y qué compró. Nada de nombre, teléfono, RUT ni dirección de entrega:
+ * a esta vista se llega sabiendo un folio y un correo, y esos datos no hacen
+ * falta para responder la única pregunta que trae el cliente, que es "¿en qué va
+ * mi pedido?".
+ *
+ * Es la lista blanca de la respuesta: si mañana se agrega un campo al pedido o a
+ * la línea de tiempo, NO se filtra solo por estar ahí. Hay que sumarlo aquí a
+ * mano, y esa es justamente la idea.
  */
 const buildPublicTracking = (order) => ({
   orderId: String(order._id),
-  folio: String(order._id).slice(-6).toUpperCase(),
+  folio: folioDe(order._id),
   status: order.status,
   estado: CLIENT_COPY[order.status]?.titulo || order.status,
   detalle: CLIENT_COPY[order.status]?.detalle || "",
   delivery_method: order.delivery_method || "delivery",
   avance_pct: avancePct(order),
   // Línea de tiempo: la máquina de estados (pedidos/estados.js) cruzada con el
-  // status_history del pedido. Cada etapa dice si ya ocurrió, cuándo y quién.
-  timeline: lineaDeTiempo(order),
+  // status_history del pedido. Se copian los campos uno por uno para dejar FUERA
+  // el `por` que trae lineaDeTiempo(): ese campo publica el NOMBRE de la persona
+  // de bodega que ejecutó cada etapa. Es dato del personal, no del pedido, y no
+  // tiene por qué llegarle a alguien que solo acertó un folio y un correo.
+  timeline: lineaDeTiempo(order).map((paso) => ({
+    estado: paso.estado,
+    titulo: paso.titulo,
+    detalle: paso.detalle,
+    cumplido: paso.cumplido,
+    actual: paso.actual,
+    fecha: paso.fecha,
+    ...(paso.anomalo ? { anomalo: true } : {}),
+  })),
   created_at: order.created_at || null,
   delivered_at: order.delivered_at || null,
+  // Lo que pagó. Es su propia compra y le sirve para reconocer el pedido; los
+  // precios línea por línea, en cambio, no se publican.
+  total: Number(order.total || 0),
   shipping: {
     carrier: order.shipping?.carrier || null,
     tracking_number: order.shipping?.tracking_number || null,
@@ -72,7 +147,12 @@ const buildPublicTracking = (order) => ({
 
 export const getTrackingByToken = async ({ orderId, token, userId }) => {
   const Order = getOrderModel();
-  const order = await Order.findById(orderId).lean();
+  // OJO con el `.select("+guest_token_hash")`: el campo está declarado con
+  // `select: false` en el modelo, así que sin pedirlo a mano llegaba SIEMPRE
+  // undefined. Consecuencia: matchesGuestToken salía por "no hay hash guardado"
+  // y el seguimiento de invitado devolvía 403 incluso con el token correcto.
+  // Estaba muerto desde el día uno, y por eso nadie lo había notado.
+  const order = await Order.findById(orderId).select("+guest_token_hash").lean();
   if (!order) throw new NotFoundError("Orden no encontrada");
 
   let authorized = false;
@@ -80,6 +160,64 @@ export const getTrackingByToken = async ({ orderId, token, userId }) => {
   if (!authorized && token && matchesGuestToken(order, token)) authorized = true;
 
   if (!authorized) throw new ForbiddenError("No autorizado para ver tracking");
+
+  return buildPublicTracking(order);
+};
+
+/**
+ * TERCERA vía de autorización, para el que compró SIN CUENTA y vuelve después
+ * desde otro teléfono o con el navegador limpio: número de pedido + el correo
+ * con el que compró.
+ *
+ * Por qué el número de pedido SOLO no basta: el folio son los últimos 6 del
+ * ObjectId de Mongo, y esos bytes son un contador que sube de a uno por
+ * documento. O sea que los pedidos consecutivos tienen folios consecutivos y se
+ * enumeran caminando hacia arriba. Además el folio se lee por encima del hombro
+ * o queda en un papel. El correo es el segundo dato que solo el dueño del pedido
+ * conoce, y es el que convierte "adivinable" en "hay que saberlo".
+ *
+ * Esta función NO toca las otras dos vías (sesión del dueño y token de
+ * invitado): es aditiva. Quien tiene sesión y es dueño del pedido sigue entrando
+ * como siempre, sin que se le vuelva a pedir el correo.
+ */
+export const lookupPublicTracking = async ({ folio, email }) => {
+  const Order = getOrderModel();
+  const folioBuscado = normalizarFolio(folio);
+  const correo = normalizarEmail(email);
+
+  if (!folioBuscado || !correo) throw errorGenerico();
+
+  // Se busca POR CORREO y no por folio: el folio no existe como campo del
+  // documento (se calcula desde el _id), así que filtrarlo en la base exigiría un
+  // regex de sufijo sobre toda la colección. El correo sí está indexado
+  // (customer.email + created_at, ver Order.js) y una persona tiene pocos
+  // pedidos, así que el calce del folio se hace en memoria sobre un puñado.
+  const candidatos = await Order.find({ "customer.email": correo })
+    .sort({ created_at: -1 })
+    .limit(MAX_PEDIDOS_POR_CORREO)
+    .lean();
+
+  const coinciden = (Array.isArray(candidatos) ? candidatos : []).filter((o) => {
+    // Aceptamos las dos formas: el folio de 6 que le mostramos al comprar, y el
+    // id completo de 24 que le queda en la URL del detalle si alguna vez lo vio.
+    const id = String(o._id).toUpperCase();
+    return folioBuscado === id || folioBuscado === folioDe(o._id);
+  });
+
+  // El folio NO es único: no hay campo, ni índice, ni restricción de unicidad, y
+  // dos pedidos pueden compartir los mismos 6 caracteres. Los candidatos vienen
+  // del más nuevo al más viejo, así que nos quedamos con el más reciente, que es
+  // el que la persona está buscando cuando escribe su número.
+  const order = coinciden[0] || null;
+  if (!order) throw errorGenerico();
+
+  // Cinturón y tirantes: la consulta ya filtró por correo, pero `customer.email`
+  // admite null en el esquema (pedidos viejos, o creados desde el WMS). Un pedido
+  // sin correo no se le entrega a nadie, y la comparación se hace en tiempo
+  // constante para no filtrar por el reloj cuánto se acertó.
+  if (!mismoEmail(normalizarEmail(order.customer?.email), correo)) {
+    throw errorGenerico();
+  }
 
   return buildPublicTracking(order);
 };

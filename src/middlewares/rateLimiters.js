@@ -61,6 +61,33 @@ export const couponLimiter = rateLimit({
   message: { success: false, code: "TOO_MANY_REQUESTS", message: "Demasiados intentos de cupón, espera unos minutos" },
 });
 
+// Consulta PÚBLICA del seguimiento de un pedido (folio + correo). Es el único
+// endpoint donde un desconocido puede adivinar: el folio son 6 caracteres y el
+// correo de una persona se supone. Sin límite propio, lo único que aplicaba era
+// el globalLimiter de 600/15min, o sea 600 intentos por ventana y por IP.
+//
+// Molde: authLimiter, que es el único que ya pelea contra fuerza bruta sobre un
+// secreto. Pero con CUPO PROPIO y no reutilizándolo: compartir el del login haría
+// que unas cuantas consultas falladas dejaran sin poder entrar a su cuenta a toda
+// la gente que sale por la misma IP (el wifi del local, el NAT del celular).
+//
+// skipSuccessfulRequests es lo que hace que la medida no moleste al que sí es
+// dueño del pedido: quien acierta y después refresca su seguimiento no gasta
+// intentos. Solo cuentan los FALLOS, que es exactamente lo que hace el que prueba.
+export const trackingLookupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: {
+    success: false,
+    code: "TOO_MANY_REQUESTS",
+    message:
+      "Demasiados intentos de consulta. Espera 15 minutos y vuelve a intentarlo.",
+  },
+});
+
 // Búsquedas sensibles con sesión de baja confianza (p.ej. buscar cliente por RUT):
 // acota el scrapeo de la cartera de crédito si se filtra un token de cajera.
 export const lookupLimiter = rateLimit({

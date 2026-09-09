@@ -87,14 +87,25 @@ const sendOrderCreatedEmail = async ({ order }) => {
       ? "Pagas al retirar tu pedido."
       : "Cuando completes el pago te avisaremos.";
 
+  // Todo pedido nuevo se despacha: el cliente necesita ver la dirección a la
+  // que va y cuánto se le cobró por llevarlo. (`retiro` solo aparece si se
+  // reenvía el correo de un pedido antiguo de retiro en bodega.)
+  const destino =
+    order.delivery_method !== "pickup"
+      ? [order.shipping?.address, order.shipping?.city].filter(Boolean).join(", ")
+      : "";
+
   let text = `Hola ${order.customer.fullName || ""}, recibimos tu pedido ${folioCorto}.\n\n`;
   if (detalleTxt) text += `Tu pedido:\n${detalleTxt}\n\n`;
+  if (destino) text += `Despacho a: ${destino} — ${clp(order.shipping_amount)}\n`;
   text += `Total: ${clp(order.total)}\n`;
   if (retiro) text += `Retiro comprometido: ${retiro}\n`;
   text += `\n${cierre}`;
 
   let html = `<p>Hola ${order.customer.fullName || ""},</p><p>Recibimos tu pedido <strong>${folioCorto}</strong>.</p>`;
   if (detalleHtml) html += `<ul>${detalleHtml}</ul>`;
+  if (destino)
+    html += `<p>Despacho a: <strong>${escapeHtml(destino)}</strong> — ${clp(order.shipping_amount)}</p>`;
   html += `<p>Total: <strong>${clp(order.total)}</strong></p>`;
   if (retiro) html += `<p>Retiro comprometido: <strong>${retiro}</strong></p>`;
   html += `<p>${cierre}</p>`;

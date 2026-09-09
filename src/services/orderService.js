@@ -59,8 +59,27 @@ import {
 } from "./couponService.js";
 import { quoteShippingForOrder } from "./shippingService.js";
 
-import { addressOneLine } from "../config/brand.js";
+import { zonaDeDespacho, CARRIER_DESPACHO } from "../config/despacho.js";
 /* ------------------------------ helpers ---------------------------------- */
+
+/**
+ * SOLO SE PAGA CON TARJETA (Webpay). Segunda barrera, después del Zod del
+ * validador: si mañana alguien afloja el esquema, agrega otro endpoint de
+ * creación o llama al servicio desde un script, el pedido sigue sin poder
+ * nacer con un medio de pago descontinuado.
+ *
+ * Ojo: esto NO afecta a los pedidos históricos pagados por transferencia o en
+ * efectivo al retirar. Aquellos ya están guardados y se siguen leyendo,
+ * cobrando y cerrando con normalidad; lo que se cierra es la entrada.
+ */
+export const assertPagoConTarjeta = (payment) => {
+  const method = String(payment?.method || "webpay").toLowerCase();
+  if (method !== "webpay") {
+    throw new BadRequestError("Solo se acepta pago con tarjeta (Webpay)", {
+      "payment.method": "Solo se acepta pago con tarjeta (Webpay)",
+    });
+  }
+};
 
 const normalizeEmail = (e) =>
   String(e || "")
@@ -80,80 +99,64 @@ const isValidEmailFormat = (e) =>
 
 const isValidPhoneCL = (p) => /^\+569\d{8}$/.test(normalizePhoneCL(p));
 
-// Dirección física de retiro. Fuente de verdad: config/brand.js.
-const PICKUP_LOCATION = addressOneLine();
-
 /**
- * Valida customer siempre y shipping solo cuando es retiro=delivery.
- * En pickup el shipping es opcional.
+ * Valida los datos del cliente y la dirección de despacho.
+ *
+ * La dirección es siempre obligatoria: ya no existe el retiro en bodega, así
+ * que todo pedido tiene que ir a alguna parte. Además la comuna tiene que estar
+ * dentro de la zona de reparto (config/despacho.js): el error se devuelve en el
+ * campo "city" a propósito, para que el checkout lo pinte junto al selector de
+ * comuna y la persona se entere ahí mismo, no al final del formulario.
  */
-const validateCustomerAndShipping = ({ customer, shipping, isPickup = false }) => {
+const validateCustomerAndShipping = ({ customer, shipping }) => {
   const errors = {};
   if (!String(customer?.fullName || "").trim())
     errors.fullName = "Nombre requerido";
   if (!isValidEmailFormat(customer?.email)) errors.email = "Email inválido";
   if (!isValidPhoneCL(customer?.phone)) errors.phone = "Teléfono inválido";
   if (!isValidRut(customer?.rut)) errors.rut = "RUT inválido";
-  if (isPickup) return errors; // pickup: no exige dirección de despacho
   if (!String(shipping?.region || "").trim())
     errors.region = "Región requerida";
   if (!String(shipping?.city || "").trim()) errors.city = "Comuna requerida";
   if (String(shipping?.address || "").trim().length < 5)
     errors.address = "Dirección inválida";
+
+  // Cobertura: solo si la comuna vino escrita, para no tapar el "Comuna
+  // requerida" de arriba con el mensaje de zona.
+  if (!errors.city) {
+    const zona = zonaDeDespacho({
+      region: shipping?.region,
+      comuna: shipping?.city,
+    });
+    if (!zona.ok) errors[zona.campo] = zona.mensaje;
+  }
+
   return errors;
 };
 
 /**
- * Hoy en America/Santiago como Date a las 00:00 (para comparar con la fecha
- * comprometida sin verse afectado por la zona del servidor).
- */
-const santiagoTodayYMD = () => {
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Santiago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  return fmt.format(new Date()); // "YYYY-MM-DD"
-};
-
-/**
- * Resuelve y valida el bloque delivery del request.
- * - method "pickup": committed_date REQUERIDA, hoy o futura (America/Santiago).
- * - method "delivery" o ausente: comportamiento delivery (retrocompatible).
- * Devuelve { isPickup, committedDate (Date|null) }.
+ * YA NO HAY RETIRO EN TIENDA. Se mantiene la función porque los clientes viejos
+ * (una app instalada que no se ha actualizado) siguen mandando el bloque
+ * delivery: en vez de crear un pedido de retiro que nadie va a preparar, se
+ * rechaza con un mensaje que explica el cambio.
+ *
+ * Los pedidos de retiro YA CREADOS no se tocan: se siguen preparando, cerrando
+ * y consultando igual que siempre. Esto solo cierra la puerta de entrada.
  */
 const resolveDelivery = (delivery = {}) => {
   const method = String(delivery?.method || "delivery").toLowerCase();
-  const isPickup = method === "pickup";
 
-  if (!isPickup) return { isPickup: false, committedDate: null };
-
-  const raw = String(delivery?.committed_date || "").trim();
-  if (!raw) {
-    throw new BadRequestError("Hay campos inválidos en el checkout", {
-      committed_date: "Fecha de retiro requerida",
-    });
+  if (method === "pickup") {
+    throw new BadRequestError(
+      "Ya no hay retiro en tienda: todos los pedidos se despachan a domicilio",
+      {
+        "delivery.method":
+          "Ya no hay retiro en tienda: todos los pedidos se despachan a domicilio",
+      },
+    );
   }
 
-  // Tomar solo la parte YYYY-MM-DD (acepta ISO completo).
-  const ymd = raw.slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
-    throw new BadRequestError("Hay campos inválidos en el checkout", {
-      committed_date: "Formato inválido (YYYY-MM-DD)",
-    });
-  }
-
-  if (ymd < santiagoTodayYMD()) {
-    throw new BadRequestError("Hay campos inválidos en el checkout", {
-      committed_date: "La fecha de retiro debe ser hoy o futura",
-    });
-  }
-
-  // Guardar como mediodía UTC del día comprometido para evitar que un offset
-  // de zona empuje la fecha al día anterior/siguiente al mostrarla.
-  const committedDate = new Date(`${ymd}T12:00:00.000Z`);
-  return { isPickup: true, committedDate };
+  return { isPickup: false, committedDate: null };
 };
 
 const buildCustomer = (raw = {}) => ({
@@ -163,13 +166,21 @@ const buildCustomer = (raw = {}) => ({
   rut: formatRut(raw.rut || ""),
 });
 
-const buildShipping = (raw = {}) => ({
-  region: String(raw.region || "").trim(),
-  city: String(raw.city || "").trim(),
-  address: String(raw.address || "").trim(),
-  addressLine2: String(raw.addressLine2 || "").trim() || null,
-  reference: String(raw.reference || "").trim() || null,
-});
+const buildShipping = (raw = {}) => {
+  const region = String(raw.region || "").trim();
+  const city = String(raw.city || "").trim();
+  // Si la dirección está en zona guardamos el nombre canónico ("Machalí", no
+  // "MACHALI" ni "machali"): las hojas de reparto agrupan por comuna y con el
+  // texto tal cual lo escribió el cliente quedaban tres comunas distintas.
+  const zona = zonaDeDespacho({ region, comuna: city });
+  return {
+    region: zona.ok ? zona.region : region,
+    city: zona.ok ? zona.comuna : city,
+    address: String(raw.address || "").trim(),
+    addressLine2: String(raw.addressLine2 || "").trim() || null,
+    reference: String(raw.reference || "").trim() || null,
+  };
+};
 
 const issueGuestToken = () => crypto.randomBytes(32).toString("hex");
 const hashGuestToken = (token) =>
@@ -420,7 +431,7 @@ const resolveShippingAmount = ({ items, shipping }) => {
     amount: Number(quote.selected?.amount || 0),
     service_name: quote.selected?.service_name || null,
     service_code: quote.selected?.service_code || null,
-    carrier: quote.selected?.carrier || "blueexpress_manual",
+    carrier: quote.selected?.carrier || CARRIER_DESPACHO,
   };
 };
 
@@ -492,28 +503,19 @@ const buildOrderPayload = ({
   notes,
   source,
   guestTokenHash,
-  deliveryMethod = "delivery",
-  pickup = null,
 }) => ({
   user_id: identity.userId || null,
   guest_id: identity.userId ? null : identity.guestId || null,
   guest_token_hash: identity.userId ? null : guestTokenHash,
   items,
   customer,
-  delivery_method: deliveryMethod,
-  ...(deliveryMethod === "pickup"
-    ? {
-        pickup: {
-          committed_date: pickup?.committed_date || null,
-          location: pickup?.location || PICKUP_LOCATION,
-          picked_up_at: null,
-        },
-      }
-    : {}),
+  // Todos los pedidos nuevos son a domicilio. El bloque `pickup` del modelo se
+  // deja de escribir (sigue existiendo para leer los pedidos de retiro viejos).
+  delivery_method: "delivery",
   shipping: {
     ...shipping,
     amount: totals.shipping_amount,
-    carrier: shipping.carrier || "blueexpress_manual",
+    carrier: shipping.carrier || CARRIER_DESPACHO,
     service_name: shipping.service_name || null,
     service_code: shipping.service_code || null,
     tracking_number: null,
@@ -521,7 +523,9 @@ const buildOrderPayload = ({
     label_url: null,
   },
   payment: {
-    method: payment?.method || "webpay",
+    // Fijo, no lo que mande el cliente: el único medio de pago es la tarjeta.
+    // assertPagoConTarjeta() ya rechazó cualquier otra cosa antes de llegar acá.
+    method: "webpay",
     platform: payment?.platform || "web",
     status: PAYMENT_STATUS.PENDING,
     transaction_id: null,
@@ -573,12 +577,13 @@ export const createOrderFromCart = async ({
   notes,
   couponCode,
 }) => {
-  const { isPickup, committedDate } = resolveDelivery(delivery);
+  resolveDelivery(delivery); // rechaza el retiro en tienda
+  assertPagoConTarjeta(payment);
 
   const customer = buildCustomer(rawCustomer);
   const shipping = buildShipping(rawShipping);
 
-  const errors = validateCustomerAndShipping({ customer, shipping, isPickup });
+  const errors = validateCustomerAndShipping({ customer, shipping });
   if (Object.keys(errors).length > 0) {
     throw new BadRequestError("Hay campos inválidos en el checkout", errors);
   }
@@ -603,15 +608,9 @@ export const createOrderFromCart = async ({
       session,
     });
 
-    // Pickup: sin cotización de envío. shipping_amount=0, carrier pickup_in_store.
-    const shippingResolved = isPickup
-      ? {
-          amount: 0,
-          service_name: null,
-          service_code: null,
-          carrier: "pickup_in_store",
-        }
-      : resolveShippingAmount({ items, shipping });
+    // El monto del despacho SIEMPRE lo pone el servidor (tarifa plana de la
+    // zona), nunca el cliente.
+    const shippingResolved = resolveShippingAmount({ items, shipping });
     const shippingAmount = shippingResolved.amount;
 
     const couponResolved = await resolveCouponDiscount({
@@ -647,10 +646,6 @@ export const createOrderFromCart = async ({
       notes,
       source: "cart",
       guestTokenHash,
-      deliveryMethod: isPickup ? "pickup" : "delivery",
-      pickup: isPickup
-        ? { committed_date: committedDate, location: PICKUP_LOCATION }
-        : null,
     });
 
     const [order] = await Order.create([payload], { session });
@@ -680,6 +675,10 @@ export const createOrderFromCustomBox = async ({
   notes,
   couponCode,
 }) => {
+  // La custom box no pasa por resolveDelivery (nunca tuvo retiro), pero sí
+  // comparte el medio de pago: acá también solo se acepta tarjeta.
+  assertPagoConTarjeta(payment);
+
   const customer = buildCustomer(rawCustomer);
   const shipping = buildShipping(rawShipping);
 

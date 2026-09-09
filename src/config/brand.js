@@ -15,6 +15,8 @@
  * dominio) admite override por variable de entorno. Nada de esto es secreto.
  */
 
+import { COMUNAS_CON_REPARTO } from "./despacho.js";
+
 const env = (key, fallback) => {
   const v = process.env[key];
   return v == null || v === "" ? fallback : v;
@@ -24,12 +26,15 @@ export const brand = {
   // ── Identidad ──────────────────────────────────────────────────────────────
   name: env("BRAND_NAME", "Cibox"),
   tagline: env("BRAND_TAGLINE", "Tu supermercado online"),
-  // No promete despacho a domicilio: el sistema solo hace retiro en bodega y
-  // los Términos lo dicen explícitamente. Cuando el despacho exista de verdad,
-  // se cambia acá (o por BRAND_DESCRIPTION) y baja a toda la tienda.
+  // Ya no hay retiro en bodega: todo se despacha a domicilio y solo dentro de
+  // la zona de Rancagua. Las comunas salen de config/despacho.js (fuente de
+  // verdad de la cobertura) para no tener la lista escrita dos veces: si se
+  // agrega una comuna allá, esta frase se actualiza sola.
   description: env(
     "BRAND_DESCRIPTION",
-    "Supermercado 100% online: compra desde la web y te preparamos el pedido para que lo retires.",
+    `Supermercado 100% online: compra desde la web y te despachamos a domicilio en ${COMUNAS_CON_REPARTO.join(
+      ", ",
+    )}.`,
   ),
 
   // ── Datos legales (Chile) ──────────────────────────────────────────────────
@@ -60,10 +65,12 @@ export const brand = {
   },
 
   // ── Dirección de la bodega desde donde se prepara y despacha ──────────────
-  // TODAVÍA SIN DEFINIR. Va vacía a propósito: la tienda oculta el mapa, la
-  // dirección de retiro y el bloque de ubicación mientras no haya una real, en
-  // vez de mostrar una equivocada. Cuando se defina, se setea por variable de
-  // entorno (BRAND_ADDRESS_LINE1, BRAND_COMUNA, …) sin tocar código.
+  // TODAVÍA SIN DEFINIR. Va vacía a propósito: la tienda oculta el mapa y el
+  // bloque de ubicación mientras no haya una real, en vez de mostrar una
+  // equivocada. Cuando se defina, se setea por variable de entorno
+  // (BRAND_ADDRESS_LINE1, BRAND_COMUNA, …) sin tocar código.
+  // Ya no es una dirección de retiro (el retiro se descontinuó), pero sigue
+  // haciendo falta como REMITENTE en etiquetas y documentos.
   address: {
     line1: env("BRAND_ADDRESS_LINE1", ""),
     line2: env("BRAND_ADDRESS_LINE2", ""),

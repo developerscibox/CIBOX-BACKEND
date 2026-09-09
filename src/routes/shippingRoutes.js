@@ -12,6 +12,7 @@ import {
 
 import {
   previewShippingSchema,
+  previewShippingFromItemsSchema,
   quoteShippingByOrderSchema,
   applyShippingSchema,
 } from "../validators/shippingValidators.js";
@@ -26,7 +27,13 @@ router.post(
   previewShipping
 );
 
-router.post("/preview-items", optionalAuth, previewShippingFromItems); // ← nuevo
+// Preview para la custom box (lista de items directa, sin carrito).
+router.post(
+  "/preview-items",
+  optionalAuth,
+  validate(previewShippingFromItemsSchema),
+  previewShippingFromItems
+);
 
 
 // Cotización para una orden existente (ownership requerido)

@@ -3,6 +3,7 @@ import { asyncHandler } from "../middlewares/errorHandler.js";
 import { SiteContent } from "../models/SiteContent.js";
 import { env } from "../config/env.js";
 import { publicBrand } from "../config/brand.js";
+import { publicDespacho } from "../config/despacho.js";
 import { logger } from "../utils/logger.js";
 import { cacheGet, cacheSet, cacheKey, cacheClearPrefix } from "../utils/responseCache.js";
 
@@ -202,6 +203,15 @@ export const getModulesConfig = asyncHandler(async (req, res) => {
 export const getBrandConfig = asyncHandler(async (req, res) => {
   res.set("Cache-Control", "public, max-age=300");
   return res.status(200).json({ success: true, data: publicBrand() });
+});
+
+// GET /api/config/despacho — zona de reparto y tarifa plana (público). Fuente
+// de verdad: config/despacho.js. La tienda pide de aquí las comunas del
+// selector y el monto del despacho para no volver a tener la lista escrita en
+// dos sitios que se desincronizan.
+export const getDespachoConfig = asyncHandler(async (req, res) => {
+  res.set("Cache-Control", "public, max-age=300");
+  return res.status(200).json({ success: true, data: publicDespacho() });
 });
 
 // ── PAUSA DE LA TIENDA ONLINE (interruptor del panel) ────────────────────────

@@ -152,6 +152,21 @@ if (isProd) {
     console.error("❌ ALLOWED_ORIGINS es obligatorio en producción");
     process.exit(1);
   }
+  // La tarjeta es el ÚNICO medio de pago: si el servidor productivo apunta al
+  // ambiente de PRUEBAS de Transbank, cada compra se ve exitosa y no entra un
+  // peso. Antes arrancaba callado justo en ese caso (el guard de arriba solo
+  // mira las credenciales cuando WEBPAY_ENV ya dice "production"). No se aborta
+  // a propósito: puede ser un ambiente de staging con NODE_ENV=production.
+  if (parsed.data.WEBPAY_ENV !== "production") {
+    console.warn(
+      "\n" +
+        "🚨🚨🚨  ATENCIÓN: NODE_ENV=production pero WEBPAY_ENV=" +
+        `${parsed.data.WEBPAY_ENV} (ambiente de PRUEBAS de Transbank).\n` +
+        "        Los pagos NO son reales: el dinero no llega a la cuenta.\n" +
+        "        Setea WEBPAY_ENV=production junto con WEBPAY_COMMERCE_CODE y\n" +
+        "        WEBPAY_API_KEY de producción.  🚨🚨🚨\n",
+    );
+  }
 }
 
 // Aviso de configuración cruzada de integraciones OPCIONALES. Se ADVIERTE pero NO se

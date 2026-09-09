@@ -1,6 +1,12 @@
 import { env } from "../config/env.js";
 import { logger } from "../utils/logger.js";
 import { BadRequestError } from "../utils/errors.js";
+import {
+  TARIFA_PLANA_CLP,
+  NOMBRE_SERVICIO_DESPACHO,
+  CARRIER_DESPACHO,
+  zonaDeDespacho,
+} from "../config/despacho.js";
 
 /* -------------------------------- helpers -------------------------------- */
 
@@ -12,6 +18,13 @@ const normalizeText = (value = "") =>
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/\s+/g, " ");
 
+/**
+ * TABLA HISTÓRICA de tarifas por región y peso (Blue Express). YA NO SE USA
+ * para cotizar: hoy el despacho es tarifa plana dentro de la zona de Rancagua
+ * (ver config/despacho.js). Se deja como referencia por si algún día se vuelve
+ * a vender fuera de la zona con cobro por peso; `quoteShippingForOrder` no la
+ * llama, así que nada de esto llega a un pedido nuevo.
+ */
 const SHIPPING_RATES = {
   "arica y parinacota": { XS: 7150, S: 8300, M: 12400, L: 17000, XL: 25000 },
   tarapaca: { XS: 6550, S: 7400, M: 10700, L: 15500, XL: 23000 },
@@ -116,6 +129,7 @@ export const getWeightTier = (grams) => {
 
 /* ------------------------ tarifa manual (Blue Express) ------------------- */
 
+/** Histórica, sin llamadores. Ver el comentario de SHIPPING_RATES. */
 export const quoteManualShippingForOrder = (order) => {
   const regionKey = resolveRegionKey(order?.shipping?.region);
   if (!regionKey) {
@@ -169,12 +183,66 @@ export const quoteManualShippingForOrder = (order) => {
   };
 };
 
+/* --------------------- tarifa plana zona Rancagua ------------------------ */
+
 /**
- * Punto único de cotización. Por ahora redirige a manual.
- * Cuando BlueExpress API esté integrado, decidir aquí.
+ * PUNTO ÚNICO DE COTIZACIÓN del backend. Lo llaman la creación de pedidos
+ * (carrito y custom box) y los cuatro endpoints de /api/shipping
+ * (preview, preview-items, quote, apply). Por eso la regla de cobertura vive
+ * aquí: puesta en este único sitio queda aplicada en los seis caminos a la vez,
+ * incluido /apply, que permite cambiar la comuna de un pedido ya creado.
+ *
+ * Dos cosas y nada más:
+ *  1. La dirección tiene que estar en la zona de reparto, o no hay venta.
+ *  2. Dentro de la zona el despacho cuesta siempre lo mismo, sin importar el
+ *     peso ni la comuna (tarifa plana de config/despacho.js).
+ *
+ * Lanza BadRequestError con `details` por campo para que el checkout pinte el
+ * error en la comuna y no en un cartel genérico.
  */
-export const quoteShippingForOrder = (order) =>
-  quoteManualShippingForOrder(order);
+export const quoteShippingForOrder = (order) => {
+  const zona = zonaDeDespacho({
+    region: order?.shipping?.region,
+    comuna: order?.shipping?.city,
+  });
+
+  if (!zona.ok) {
+    throw new BadRequestError(zona.mensaje, { [zona.campo]: zona.mensaje });
+  }
+
+  const amount = TARIFA_PLANA_CLP;
+
+  // El peso ya no cambia el precio, pero se sigue calculando porque bodega lo
+  // usa para armar el bulto y para el remito.
+  const weightGrams = getOrderTotalWeightGrams(order);
+
+  const service = {
+    id: "despacho_zona_rancagua",
+    service_code: "zona_rancagua",
+    service_name: NOMBRE_SERVICIO_DESPACHO,
+    price: amount,
+    amount,
+    region: zona.region,
+    comuna: zona.comuna,
+    weight_grams: weightGrams,
+  };
+
+  return {
+    services: [service],
+    selected: {
+      service_code: service.service_code,
+      service_name: service.service_name,
+      amount,
+      carrier: CARRIER_DESPACHO,
+    },
+    meta: {
+      source: "tarifa_plana",
+      region: zona.region,
+      comuna: zona.comuna,
+      weight_grams: weightGrams,
+    },
+  };
+};
 
 /* --------------------------- creación de envío --------------------------- */
 
@@ -197,7 +265,9 @@ export const createShipmentForPaidOrder = async (order) => {
   if (!order.shipping?.shipment_status) {
     order.shipping = order.shipping || {};
     order.shipping.shipment_status = "pending_pickup";
-    order.shipping.carrier = order.shipping.carrier || "blueexpress_manual";
+    // Fallback solo por si el pedido viniera sin carrier: el reparto de la zona
+    // lo hace Cibox, no un courier.
+    order.shipping.carrier = order.shipping.carrier || CARRIER_DESPACHO;
     await order.save();
   }
 
