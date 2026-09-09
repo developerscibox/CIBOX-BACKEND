@@ -102,6 +102,19 @@ const sendOrderCreatedEmail = async ({ order }) => {
   if (retiro) text += `Retiro comprometido: ${retiro}\n`;
   text += `\n${cierre}`;
 
+  // El enlace para seguir el pedido, con el número ya puesto.
+  //
+  // Va aquí porque el correo es donde la persona vuelve a mirar cuando quiere
+  // saber en qué va su compra, y quien compró SIN CUENTA no tiene ningún otro
+  // registro: este correo y este número es todo lo que le queda. Sin el enlace
+  // dependía de acordarse de entrar a la tienda y encontrar la pantalla sola.
+  const urlSeguimiento =
+    String(env.FRONTEND_URL || "").replace(/\/+$/, "") +
+    "/seguir-mi-pedido?folio=" +
+    encodeURIComponent(folioCorto.replace("#", ""));
+  text += `\n\nPuedes seguir tu pedido acá:\n${urlSeguimiento}\n`;
+  text += `Te pedirá este número (${folioCorto}) y tu correo. No necesitas tener cuenta.`;
+
   let html = `<p>Hola ${order.customer.fullName || ""},</p><p>Recibimos tu pedido <strong>${folioCorto}</strong>.</p>`;
   if (detalleHtml) html += `<ul>${detalleHtml}</ul>`;
   if (destino)
@@ -109,6 +122,12 @@ const sendOrderCreatedEmail = async ({ order }) => {
   html += `<p>Total: <strong>${clp(order.total)}</strong></p>`;
   if (retiro) html += `<p>Retiro comprometido: <strong>${retiro}</strong></p>`;
   html += `<p>${cierre}</p>`;
+  html +=
+    `<p style="margin:22px 0"><a href="${escapeHtml(urlSeguimiento)}" ` +
+    `style="background:#B6D900;color:#17202A;text-decoration:none;font-weight:700;` +
+    `padding:12px 22px;border-radius:12px;display:inline-block">Seguir mi pedido</a></p>` +
+    `<p style="color:#5A6672;font-size:13px">Te pedirá este número ` +
+    `(<strong>${folioCorto}</strong>) y tu correo. No necesitas tener cuenta.</p>`;
 
   // Transferencia: incluir datos bancarios (env BANK_TRANSFER_INFO, multilínea),
   // el folio del pedido y la instrucción de subir el comprobante (auditoría H1).
