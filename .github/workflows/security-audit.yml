@@ -1,0 +1,29 @@
+# Tarea 2.13 del plan de seguridad: el CI se pone rojo si entra una dependencia
+# de producción con vulnerabilidad alta o crítica, y los tests del backend
+# corren en cada cambio. `--omit=dev` porque las herramientas de build (Expo,
+# Vite, Metro) traen alertas que no corren en producción; ver hallazgo 3 del
+# informe de revisión.
+name: Seguridad y tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm test
+

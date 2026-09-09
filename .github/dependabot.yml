@@ -1,0 +1,15 @@
+# Tarea 2.13 del plan de seguridad: un PR automático por cada dependencia con
+# parche, agrupado por proyecto para no recibir veinte PRs el mismo lunes.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      backend:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm

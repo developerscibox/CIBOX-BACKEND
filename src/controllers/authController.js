@@ -12,8 +12,12 @@ import {
 // WEB dependen EXCLUSIVAMENTE de la cookie httpOnly (cibox_rt): el refresh token no
 // debe viajar por body porque un XSS podría leerlo/exfiltrarlo. Nativo (sin cookie
 // fiable) y dev (cookie cross-origin que no viaja) sí lo reciben por body.
+// En producción, los clientes web (tienda y panel de bodega) reciben el refresh
+// SOLO en la cookie httpOnly; nunca en el body, para que ningún script del
+// origen pueda leerlo. Nativo y desarrollo local siguen recibiéndolo en el body.
+const CLIENTES_WEB = new Set(["web", "panel"]);
 const exposeRefreshInBody = (req) =>
-  !(env.isProd && String(req.headers["x-client-platform"] || "") === "web");
+  !(env.isProd && CLIENTES_WEB.has(String(req.headers["x-client-platform"] || "")));
 
 export const register = asyncHandler(async (req, res) => {
   const user = await authService.registerUser(req.body);
@@ -33,7 +37,7 @@ export const login = asyncHandler(async (req, res) => {
   });
   // Refresh token como cookie httpOnly (inaccesible a JS → mitiga XSS). En el body
   // solo para nativo/dev (ver exposeRefreshInBody); web de prod usa solo la cookie.
-  setRefreshCookie(res, refreshToken);
+  setRefreshCookie(req, res, refreshToken);
   res.status(200).json({
     success: true,
     data: { user, accessToken, ...(exposeRefreshInBody(req) ? { refreshToken } : {}) },
@@ -44,7 +48,7 @@ export const login = asyncHandler(async (req, res) => {
 export const logout = asyncHandler(async (req, res) => {
   const rt = readRefreshCookie(req) || req.body.refreshToken;
   await authService.logoutUser(req.user.id, rt);
-  clearRefreshCookie(res);
+  clearRefreshCookie(req, res);
   res.status(200).json({
     success: true,
     message: "Sesión cerrada",
@@ -56,7 +60,7 @@ export const refresh = asyncHandler(async (req, res) => {
   // Preferir la cookie httpOnly; caer al body para clientes/dev sin cookie.
   const rt = readRefreshCookie(req) || req.body.refreshToken;
   const tokens = await authService.refreshTokens(rt, device);
-  setRefreshCookie(res, tokens.refreshToken);
+  setRefreshCookie(req, res, tokens.refreshToken);
   const data = { ...tokens };
   if (!exposeRefreshInBody(req)) delete data.refreshToken;
   res.status(200).json({

@@ -71,10 +71,12 @@ export const resendVerificationSchema = z.object({
   email: emailSchema,
 });
 
+// El refresh token puede venir en el body (app nativa, desarrollo) o en la
+// cookie httpOnly (tienda y panel web en producción). Cuando viene en la
+// cookie el body llega vacío, así que acá es opcional: el controlador lee
+// cookie O body, y el servicio rechaza con 401 si no hay ninguno.
 export const refreshTokenSchema = z.object({
-  refreshToken: z
-    .string({ required_error: "refreshToken requerido" })
-    .min(10, "refreshToken inválido"),
+  refreshToken: z.string().min(10, "refreshToken inválido").optional(),
 });
 
 export const updateProfileSchema = z

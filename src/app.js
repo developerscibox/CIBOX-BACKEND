@@ -79,6 +79,18 @@ app.get("/", (req, res) => res.json({ name: `${brand.name} API`, version: "2.0.0
 app.get("/health", (req, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 app.get("/ready", (req, res) => res.json({ status: "ready" }));
 
+// RFC 9116: a quién avisar si alguien encuentra una vulnerabilidad. Sin esto,
+// el que la encuentra la publica o la vende; con esto, la reporta.
+app.get("/.well-known/security.txt", (req, res) => {
+  const lineas = [
+    `Contact: mailto:${brand.contact?.email || "developers@cibox.cl"}`,
+    "Preferred-Languages: es, en",
+    "Canonical: https://api.cibox.cl/.well-known/security.txt",
+    `Expires: ${new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()}`,
+  ];
+  res.type("text/plain").send(lineas.join("\n") + "\n");
+});
+
 app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/orders", orderRoutes);
