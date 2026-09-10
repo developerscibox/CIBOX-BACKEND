@@ -2,6 +2,16 @@
  * Plantillas HTML/text para emails transaccionales.
  * Toda interpolación pasa por escapeHtml para evitar inyección.
  */
+import { env } from "../config/env.js";
+
+// Enlace al seguimiento público con el número ya puesto. Misma fórmula que el
+// correo "Recibimos tu pedido" (orderController): quien compró sin cuenta no
+// tiene otro registro que este correo, así que el enlace tiene que ir en TODOS
+// los correos del pedido, no solo en el primero.
+const urlSeguimiento = (folio) =>
+  String(env.FRONTEND_URL || "").replace(/\/+$/, "") +
+  "/seguir-mi-pedido?folio=" +
+  encodeURIComponent(String(folio || "").replace("#", ""));
 
 export const escapeHtml = (str) => {
   if (str === null || str === undefined) return "";
@@ -188,6 +198,10 @@ Hola ${customer.fullName || ""},
 
 Tu pago fue confirmado correctamente.
 
+Tu número de pedido es ${shortOrder}. Puedes seguirlo acá:
+${urlSeguimiento(shortOrder)}
+Te pedirá ese número y tu correo. No necesitas tener cuenta.
+
 Orden: ${orderId}
 Fecha: ${formatDate(order.updated_at || order.created_at)}
 ${isCustomBox ? "Tipo: Caja personalizada\n" : ""}
@@ -219,6 +233,16 @@ Gracias por comprar en CIBOX.
 
       <p>Hola <strong>${escapeHtml(customer.fullName || "")}</strong>,</p>
       <p>Tu pago fue confirmado correctamente. Ahora comenzaremos a preparar tu pedido.</p>
+
+      <p style="margin:18px 0 6px;">Tu número de pedido es <strong>#${escapeHtml(shortOrder)}</strong>.</p>
+      <p style="margin:0 0 18px;">
+        <a href="${escapeHtml(urlSeguimiento(shortOrder))}"
+           style="display:inline-block;background:#004568;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:8px;">
+          Seguir mi pedido
+        </a>
+        <br>
+        <span style="font-size:12px;color:#666;">Te pedirá ese número y tu correo. No necesitas tener cuenta.</span>
+      </p>
 
       <h3>Resumen de la orden</h3>
       <p><strong>Número de orden:</strong> ${escapeHtml(orderId)}</p>
