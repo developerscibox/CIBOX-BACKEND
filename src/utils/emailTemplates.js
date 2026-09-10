@@ -3,6 +3,7 @@
  * Toda interpolación pasa por escapeHtml para evitar inyección.
  */
 import { env } from "../config/env.js";
+import { brand, addressOneLine } from "../config/brand.js";
 
 // Enlace al seguimiento público con el número ya puesto. Misma fórmula que el
 // correo "Recibimos tu pedido" (orderController): quien compró sin cuenta no
@@ -25,11 +26,61 @@ export const escapeHtml = (str) => {
 
 const escapeAttr = (str) => escapeHtml(str);
 
+// Paleta de brand.colors, escrita a mano porque los correos no cargan CSS ni
+// JS: todo va inline. Azul Cibox para cabecera y titulares, lima para el botón
+// de acción (con texto oscuro encima, como manda la identidad), gris claro de
+// fondo para que la tarjeta blanca se recorte.
+const C = {
+  azul: brand.colors?.primary || "#004568",
+  navy: brand.colors?.primaryDark || "#003D49",
+  lima: brand.colors?.accent || "#B6D900",
+  texto: "#17202A",
+  gris: "#5A6672",
+  borde: "#E2E6EA",
+  fondo: "#F5F6F7",
+};
+
 const baseLayout = (innerHtml) => `
-  <div style="font-family: Arial, sans-serif; color: #111; max-width: 600px; margin: 0 auto;">
-    ${innerHtml}
+  <div style="background:${C.fondo};padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:${C.texto};">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;border-collapse:collapse;">
+      <tr>
+        <td style="background:${C.azul};border-radius:14px 14px 0 0;padding:22px 28px;">
+          <span style="font-size:22px;font-weight:900;letter-spacing:3px;color:#ffffff;">${escapeHtml(String(brand.name || "CIBOX").toUpperCase())}</span>
+          <span style="display:block;margin-top:4px;font-size:12px;color:${C.lima};font-weight:700;">${escapeHtml(brand.tagline || "Tu supermercado online")}</span>
+        </td>
+      </tr>
+      <tr>
+        <td style="background:#ffffff;padding:28px;border:1px solid ${C.borde};border-top:0;">
+          ${innerHtml}
+        </td>
+      </tr>
+      <tr>
+        <td style="background:${C.navy};border-radius:0 0 14px 14px;padding:18px 28px;font-size:12px;line-height:1.7;color:#cfe3ea;">
+          <strong style="color:#ffffff;">${escapeHtml(brand.legal?.razon_social || brand.name || "CIBOX")}</strong><br>
+          ${escapeHtml(addressOneLine())}<br>
+          ${brand.contact?.whatsapp ? `WhatsApp <a href="https://wa.me/${escapeHtml(brand.contact.whatsapp)}" style="color:${C.lima};text-decoration:none;">+${escapeHtml(brand.contact.whatsapp)}</a> · ` : ""}
+          <a href="mailto:${escapeHtml(brand.contact?.email_soporte || brand.contact?.email || "")}" style="color:${C.lima};text-decoration:none;">${escapeHtml(brand.contact?.email_soporte || brand.contact?.email || "")}</a>
+          ${brand.contact?.instagram ? ` · <a href="https://instagram.com/${escapeHtml(brand.contact.instagram)}" style="color:${C.lima};text-decoration:none;">@${escapeHtml(brand.contact.instagram)}</a>` : ""}
+        </td>
+      </tr>
+    </table>
   </div>
 `;
+
+// Etiquetas en español para lo que el modelo guarda en clave.
+const METODO_PAGO = { webpay: "Tarjeta (Webpay)", transfer: "Transferencia", cash_on_pickup: "Efectivo al retirar", cash: "Efectivo" };
+const ESTADO_PAGO = { approved: "Aprobado", paid: "Pagado", pending: "Pendiente", processing: "En proceso", failed: "Rechazado", refunded: "Reembolsado" };
+const etiqueta = (mapa, clave, porDefecto) => mapa[String(clave || "").toLowerCase()] || porDefecto || String(clave || "—");
+
+// Un dato del resumen: rótulo gris pequeño arriba, valor abajo. Se usa en
+// tablas de dos columnas porque los correos no entienden flex ni grid.
+const dato = (rotulo, valor) => `
+  <td valign="top" width="50%" style="padding:0 8px 14px 0;">
+    <div style="font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:${C.gris};margin-bottom:3px;">${escapeHtml(rotulo)}</div>
+    <div style="font-size:14px;color:${C.texto};">${valor}</div>
+  </td>`;
+
+const titulo = (texto) => `<h3 style="margin:26px 0 12px;font-size:15px;color:${C.azul};letter-spacing:.3px;">${escapeHtml(texto)}</h3>`;
 
 const button = (href, label) => `
   <p>
@@ -156,16 +207,16 @@ export const buildPaymentApprovedTemplate = ({ order, taxDocument = null }) => {
 
       return `
       <tr>
-        <td style="padding:8px;border-bottom:1px solid #eee;">
+        <td style="padding:10px 8px;border-bottom:1px solid ${C.borde};font-size:14px;color:${C.texto};">
           ${escapeHtml(item.name || "Producto")}${label}
         </td>
-        <td style="padding:8px;border-bottom:1px solid #eee;text-align:center;">
+        <td style="padding:10px 8px;border-bottom:1px solid ${C.borde};text-align:center;font-size:14px;color:${C.gris};">
           ${escapeHtml(item.quantity)}
         </td>
-        <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">
+        <td style="padding:10px 8px;border-bottom:1px solid ${C.borde};text-align:right;font-size:14px;color:${C.gris};">
           ${escapeHtml(money(item.price))}
         </td>
-        <td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">
+        <td style="padding:10px 8px;border-bottom:1px solid ${C.borde};text-align:right;font-size:14px;font-weight:700;color:${C.texto};">
           ${escapeHtml(money(item.subtotal))}
         </td>
       </tr>
@@ -229,40 +280,35 @@ Gracias por comprar en CIBOX.
     `.trim(),
 
     html: baseLayout(`
-      <h2 style="color:#004568;">Pago confirmado</h2>
+      <div style="text-align:center;padding:6px 0 18px;">
+        <div style="display:inline-block;width:56px;height:56px;line-height:56px;border-radius:28px;background:${C.lima};color:${C.texto};font-size:28px;font-weight:900;">&#10003;</div>
+        <h1 style="margin:14px 0 6px;font-size:24px;color:${C.azul};">Pago confirmado</h1>
+        <p style="margin:0;font-size:15px;color:${C.gris};">Hola ${escapeHtml(customer.fullName || "")}, ya estamos preparando tu pedido.</p>
+      </div>
 
-      <p>Hola <strong>${escapeHtml(customer.fullName || "")}</strong>,</p>
-      <p>Tu pago fue confirmado correctamente. Ahora comenzaremos a preparar tu pedido.</p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:${C.fondo};border-radius:12px;">
+        <tr>
+          <td style="padding:18px 20px;text-align:center;">
+            <div style="font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:${C.gris};">Número de pedido</div>
+            <div style="font-size:30px;font-weight:900;letter-spacing:2px;color:${C.azul};margin:4px 0 12px;">#${escapeHtml(shortOrder)}</div>
+            <a href="${escapeHtml(urlSeguimiento(shortOrder))}"
+               style="display:inline-block;background:${C.lima};color:${C.texto};text-decoration:none;font-weight:800;font-size:15px;padding:13px 26px;border-radius:10px;">
+              Seguir mi pedido
+            </a>
+            <div style="font-size:12px;color:${C.gris};margin-top:10px;">Te pedirá ese número y tu correo. No necesitas tener cuenta.</div>
+          </td>
+        </tr>
+      </table>
 
-      <p style="margin:18px 0 6px;">Tu número de pedido es <strong>#${escapeHtml(shortOrder)}</strong>.</p>
-      <p style="margin:0 0 18px;">
-        <a href="${escapeHtml(urlSeguimiento(shortOrder))}"
-           style="display:inline-block;background:#004568;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:8px;">
-          Seguir mi pedido
-        </a>
-        <br>
-        <span style="font-size:12px;color:#666;">Te pedirá ese número y tu correo. No necesitas tener cuenta.</span>
-      </p>
-
-      <h3>Resumen de la orden</h3>
-      <p><strong>Número de orden:</strong> ${escapeHtml(orderId)}</p>
-      <p><strong>Fecha:</strong> ${escapeHtml(formatDate(order.updated_at || order.created_at))}</p>
-
-      <h3>Datos del cliente</h3>
-      <p><strong>Nombre:</strong> ${escapeHtml(customer.fullName || "—")}</p>
-      <p><strong>RUT:</strong> ${escapeHtml(customer.rut || "—")}</p>
-      <p><strong>Email:</strong> ${escapeHtml(customer.email || "—")}</p>
-      <p><strong>Teléfono:</strong> ${escapeHtml(customer.phone || "—")}</p>
-
-      <h3>Productos</h3>
+      ${titulo("Tu pedido")}
       ${sourceLabel}
-      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
         <thead>
           <tr>
-            <th align="left" style="padding:8px;border-bottom:2px solid #ddd;">Producto</th>
-            <th align="center" style="padding:8px;border-bottom:2px solid #ddd;">Cant.</th>
-            <th align="right" style="padding:8px;border-bottom:2px solid #ddd;">Precio</th>
-            <th align="right" style="padding:8px;border-bottom:2px solid #ddd;">Subtotal</th>
+            <th align="left" style="padding:8px;border-bottom:2px solid ${C.azul};font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:${C.gris};">Producto</th>
+            <th align="center" style="padding:8px;border-bottom:2px solid ${C.azul};font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:${C.gris};">Cant.</th>
+            <th align="right" style="padding:8px;border-bottom:2px solid ${C.azul};font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:${C.gris};">Precio</th>
+            <th align="right" style="padding:8px;border-bottom:2px solid ${C.azul};font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:${C.gris};">Subtotal</th>
           </tr>
         </thead>
         <tbody>
@@ -270,26 +316,38 @@ Gracias por comprar en CIBOX.
         </tbody>
       </table>
 
-      <h3>Totales</h3>
-      <p><strong>Subtotal:</strong> ${escapeHtml(money(order.subtotal))}</p>
-      <p><strong>Envío:</strong> ${escapeHtml(money(order.shipping_amount))}</p>
-      <p><strong>Descuento:</strong> ${escapeHtml(money(order.discount_amount))}</p>
-      <p style="font-size:18px;"><strong>Total pagado:</strong> ${escapeHtml(money(order.total))}</p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-top:6px;">
+        <tr><td style="padding:6px 8px;font-size:14px;color:${C.gris};">Subtotal</td><td align="right" style="padding:6px 8px;font-size:14px;color:${C.texto};">${escapeHtml(money(order.subtotal))}</td></tr>
+        <tr><td style="padding:6px 8px;font-size:14px;color:${C.gris};">Envío</td><td align="right" style="padding:6px 8px;font-size:14px;color:${C.texto};">${escapeHtml(money(order.shipping_amount))}</td></tr>
+        ${Number(order.discount_amount) > 0 ? `<tr><td style="padding:6px 8px;font-size:14px;color:${C.gris};">Descuento</td><td align="right" style="padding:6px 8px;font-size:14px;color:#1D7A4C;">−${escapeHtml(money(order.discount_amount))}</td></tr>` : ""}
+        <tr><td style="padding:12px 8px 6px;font-size:16px;font-weight:800;color:${C.azul};border-top:2px solid ${C.azul};">Total pagado</td><td align="right" style="padding:12px 8px 6px;font-size:20px;font-weight:900;color:${C.azul};border-top:2px solid ${C.azul};">${escapeHtml(money(order.total))}</td></tr>
+      </table>
 
-      <h3>Envío</h3>
-      <p><strong>Región:</strong> ${escapeHtml(shipping.region || "—")}</p>
-      <p><strong>Ciudad:</strong> ${escapeHtml(shipping.city || "—")}</p>
-      <p><strong>Dirección:</strong> ${escapeHtml(shipping.address || "—")}</p>
-      <p><strong>Servicio:</strong> ${escapeHtml(shipping.service_name || "—")}</p>
+      ${titulo(order.delivery_method === "pickup" ? "Retiro" : "Despacho")}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+        <tr>
+          ${order.delivery_method === "pickup"
+            ? dato("Modalidad", "Retiro en bodega")
+            : dato("Dirección", escapeHtml([shipping.address, shipping.city, shipping.region].filter(Boolean).join(", ") || "—"))}
+          ${dato("Contacto", `${escapeHtml(customer.fullName || "—")}<br>${escapeHtml(customer.phone || "")}`)}
+        </tr>
+      </table>
 
-      <h3>Pago</h3>
-      <p><strong>Método:</strong> ${escapeHtml(payment.method || "Webpay")}</p>
-      <p><strong>Estado:</strong> ${escapeHtml(payment.status || "approved")}</p>
-      <p><strong>Código autorización:</strong> ${escapeHtml(payment.authorization_code || "—")}</p>
+      ${titulo("Pago")}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+        <tr>
+          ${dato("Método", escapeHtml(etiqueta(METODO_PAGO, payment.method, "Webpay")))}
+          ${dato("Estado", escapeHtml(etiqueta(ESTADO_PAGO, payment.status, "Aprobado")))}
+        </tr>
+        <tr>
+          ${dato("Fecha", escapeHtml(formatDate(order.updated_at || order.created_at)))}
+          ${payment.authorization_code ? dato("Código de autorización", escapeHtml(payment.authorization_code)) : dato("Referencia", `<span style="font-size:12px;color:${C.gris};">${escapeHtml(orderId)}</span>`)}
+        </tr>
+      </table>
 
       ${taxHtml}
 
-      <p style="margin-top:24px;">Gracias por comprar en <strong>CIBOX</strong>.</p>
+      <p style="margin:26px 0 0;font-size:14px;color:${C.gris};">Gracias por comprar en <strong style="color:${C.azul};">${escapeHtml(brand.name || "CIBOX")}</strong>. Si algo no cuadra, responde este correo o escríbenos por WhatsApp.</p>
     `),
   };
 };
