@@ -41,6 +41,7 @@ const C = {
 };
 
 const baseLayout = (innerHtml) => `
+  <meta charset="utf-8">
   <div style="background:${C.fondo};padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:${C.texto};">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;border-collapse:collapse;">
       <tr>
