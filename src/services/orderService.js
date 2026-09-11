@@ -443,11 +443,14 @@ const computeOrderTotals = ({ subtotal, shippingAmount, discountAmount }) => {
  * cliente ve un error genérico, el pedido queda pendiente y el stock bloqueado
  * hasta que lo cancele el trabajo de expiración. Es mejor no crearla.
  */
-const assertTotalCobrable = (totals) => {
+export const assertTotalCobrable = (totals) => {
   if (Number(totals?.total) > 0) return;
+  // No se sugiere "agrega más productos": con un cupón porcentual el descuento
+  // crece junto con el carrito y el total se queda pegado en cero por mucho que
+  // el cliente agregue. Lo único que destraba el pedido es sacar el cupón.
   throw new BadRequestError(
     "El descuento cubre el pedido completo y no queda nada que cobrar. " +
-      "Quita el cupón o agrega algún producto.",
+      "Quita el cupón para continuar.",
     { couponCode: "El descuento deja el total en cero" },
   );
 };

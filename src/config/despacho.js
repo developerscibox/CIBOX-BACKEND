@@ -33,19 +33,47 @@ const env = (key, fallback) => {
   return v == null || v === "" ? fallback : v;
 };
 
+/**
+ * Lee un monto en pesos desde el entorno, SOLO si viene escrito como un entero
+ * pelado. Cualquier otra cosa se ignora y se usa el valor por defecto.
+ *
+ * Esto no es exceso de celo: son las dos variables que cambian lo que se le
+ * cobra a un cliente sin pasar por un despliegue ni por una revisión, y la
+ * forma natural de escribir sesenta mil pesos en Chile —60.000— la leía
+ * `Number()` como sesenta. Con eso, DESPACHO_ENVIO_GRATIS_CLP=60.000 regalaba
+ * el despacho de TODOS los pedidos y DESPACHO_TARIFA_CLP=3.990 cobraba tres
+ * pesos de flete, en silencio y sin nada raro en los registros.
+ *
+ * Ante un valor que no se entiende se avisa fuerte y se vuelve al valor por
+ * defecto, que no es el ideal pero es CONOCIDO. No se lanza: dejar la API caída
+ * porque alguien escribió mal una promoción es peor que seguir cobrando la
+ * tarifa de siempre. El valor que quedó vigente se puede comprobar en
+ * GET /api/config/despacho.
+ */
+const montoDeEnv = (clave, porDefecto) => {
+  const bruto = env(clave, porDefecto);
+  const texto = String(bruto).trim();
+
+  if (/^\d+$/.test(texto)) return Number(texto);
+
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[despacho] ${clave}="${bruto}" no es un entero de pesos (se esperaba algo ` +
+      `como 60000, sin puntos ni símbolos). Se ignora y se usa ${porDefecto}.`,
+  );
+  return Number(porDefecto);
+};
+
 /** Tarifa plana por pedido dentro de la zona (CLP, entero). */
-export const TARIFA_PLANA_CLP = Math.max(
-  0,
-  Math.round(Number(env("DESPACHO_TARIFA_CLP", "3990")) || 0),
-);
+export const TARIFA_PLANA_CLP = montoDeEnv("DESPACHO_TARIFA_CLP", "3990");
 
 /**
  * Monto de mercadería desde el cual el despacho sale gratis (CLP, entero).
  * 0 apaga la promoción.
  */
-export const ENVIO_GRATIS_DESDE_CLP = Math.max(
-  0,
-  Math.round(Number(env("DESPACHO_ENVIO_GRATIS_CLP", "60000")) || 0),
+export const ENVIO_GRATIS_DESDE_CLP = montoDeEnv(
+  "DESPACHO_ENVIO_GRATIS_CLP",
+  "60000",
 );
 
 /**

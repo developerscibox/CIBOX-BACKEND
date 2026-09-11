@@ -9,7 +9,10 @@ import { ORDER_STATUS, PAYMENT_STATUS } from "../utils/constants.js";
 import { quoteShippingForOrder } from "../services/shippingService.js";
 import { calculateItemPricing } from "../services/pricingService.js";
 import { CARRIER_DESPACHO } from "../config/despacho.js";
-import { findOrderForOwner } from "../services/orderService.js";
+import {
+  assertTotalCobrable,
+  findOrderForOwner,
+} from "../services/orderService.js";
 
 /**
  * Campos de Product que necesita una cotización: el peso arma el bulto y el
@@ -192,6 +195,15 @@ export const applyShippingToOrder = asyncHandler(async (req, res) => {
   const discount = Math.min(Number(order.discount_amount || 0), subtotal);
   order.total = Math.max(0, subtotal + order.shipping_amount - discount);
   order.payment.amount = order.total;
+
+  // El mismo freno que la creación del pedido. Este es el único camino que
+  // mueve el total DESPUÉS de crear, y desde que el despacho puede valer 0 una
+  // recotización puede dejar el total en cero: un pedido con un descuento que
+  // cubre todo el subtotal deja de tener flete que sumar en cuanto la comuna
+  // nueva cae en envío gratis. Un pedido en $0 no se puede pagar y se queda
+  // pendiente con el stock comprometido, así que no se guarda: el pedido sigue
+  // como estaba y el cliente recibe el motivo.
+  assertTotalCobrable({ total: order.total });
 
   await order.save();
 

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 
 import {
   TARIFA_PLANA_CLP,
@@ -388,4 +389,90 @@ test("con el mínimo en 0 la promoción queda apagada, no regalada", () => {
   assert.equal(r.gratisConMucho, false, "con el mínimo en 0 nada es gratis");
   assert.equal(r.costoConMucho, TARIFA_PLANA_CLP);
   assert.equal(r.publico, 0, "la tienda tiene que poder leer el apagado");
+});
+
+
+/* ──────────────── lo que el carrito muestra vs. lo que se cobra ─────────── */
+
+// El envío gratis se decide por monto, así que cualquier diferencia entre el
+// precio que el carrito GUARDA y el que la creación del pedido CALCULA puede
+// cruzar el mínimo en la pantalla sin cruzarlo en el cobro. Esa diferencia
+// existía: `buildCartItem` no miraba `cart.from_pantry` y `rebuildItemsFromCart`
+// sí, así que tocar una línea de un carrito de Mi Despensa la devolvía a precio
+// de lista solo en el carrito.
+
+test("el carrito cotiza con la misma regla con la que se cobra", async () => {
+  const fuente = await readFile(
+    new URL("../src/controllers/cartController.js", import.meta.url),
+    "utf8",
+  );
+
+  // buildCartItem recibe fromPantry...
+  assert.match(
+    fuente,
+    /const buildCartItem = \(\{[^}]*fromPantry/,
+    "buildCartItem tiene que aceptar fromPantry",
+  );
+  // ...se lo pasa a calculateItemPricing (la llamada entera, hasta su cierre).
+  const inicio = fuente.indexOf("calculateItemPricing({");
+  const llamada = fuente.slice(inicio, fuente.indexOf("});", inicio));
+  assert.match(llamada, /fromPantry/, "el precio del carrito ignora la despensa");
+  // ...y las dos puertas que escriben líneas le pasan la marca del carrito.
+  const usos = fuente.match(/fromPantry: Boolean\(cart\.from_pantry\)/g) || [];
+  assert.equal(
+    usos.length,
+    2,
+    "agregar y actualizar líneas tienen que respetar from_pantry",
+  );
+});
+
+test("el descuento de despensa no puede mover el pedido al otro lado del mínimo", () => {
+  // Con PANTRY_DISCOUNT=7 en producción: un carrito que en precio de lista da
+  // justo el mínimo, con el descuento aplicado queda debajo. Si el carrito
+  // mostrara el primero y el pedido cobrara el segundo, la pantalla diría
+  // "Gratis" y Webpay cobraría el flete.
+  const lista = ENVIO_GRATIS_DESDE_CLP;
+  const conDescuento = Math.round(lista * 0.93);
+
+  assert.equal(quoteShippingForOrder(pedidoDe(lista)).selected.amount, 0);
+  assert.equal(
+    quoteShippingForOrder(pedidoDe(conDescuento)).selected.amount,
+    TARIFA_PLANA_CLP,
+    "el subtotal con descuento no llega al mínimo y tiene que pagar despacho",
+  );
+});
+
+/* ─────────────── el monto no se lee mal desde el entorno ────────────────── */
+
+test("un monto mal escrito en el entorno no cambia lo que se cobra", () => {
+  // "60.000" es la forma natural de escribirlo en Chile y `Number()` lo lee
+  // como SESENTA: con eso, el despacho de todos los pedidos salía gratis sin
+  // que nada se viera raro. Ahora se ignora y se avisa.
+  const guion =
+    'const c = await import("./src/config/despacho.js");' +
+    "console.log(JSON.stringify({" +
+    "umbral: c.ENVIO_GRATIS_DESDE_CLP," +
+    "tarifa: c.TARIFA_PLANA_CLP" +
+    "}));";
+
+  const conValor = (env) => {
+    const salida = execFileSync(
+      process.execPath,
+      ["--input-type=module", "-e", guion],
+      { cwd: process.cwd(), encoding: "utf8", env: { ...process.env, ...env } },
+    );
+    return JSON.parse(salida.trim().split("\n").pop());
+  };
+
+  assert.equal(
+    conValor({ DESPACHO_ENVIO_GRATIS_CLP: "60.000" }).umbral,
+    60000,
+    "60.000 no puede quedar en 60 pesos",
+  );
+  assert.equal(conValor({ DESPACHO_TARIFA_CLP: "3.990" }).tarifa, 3990);
+  assert.equal(conValor({ DESPACHO_ENVIO_GRATIS_CLP: "abc" }).umbral, 60000);
+  assert.equal(conValor({ DESPACHO_ENVIO_GRATIS_CLP: "-100" }).umbral, 60000);
+  // Un entero pelado sí se respeta, incluido el 0 que apaga la promoción.
+  assert.equal(conValor({ DESPACHO_ENVIO_GRATIS_CLP: "45000" }).umbral, 45000);
+  assert.equal(conValor({ DESPACHO_ENVIO_GRATIS_CLP: "0" }).umbral, 0);
 });

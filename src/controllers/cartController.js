@@ -38,7 +38,7 @@ const ownerAssign = (identity) => {
 const recalcCartTotal = (items) =>
   items.reduce((acc, it) => acc + Number(it.subtotal || 0), 0);
 
-const buildCartItem = ({ product, quantity, user }) => {
+const buildCartItem = ({ product, quantity, user, fromPantry = false }) => {
   if (!product) throw new NotFoundError("Producto no encontrado");
   if (!product.is_active) throw new ConflictError("Producto inactivo");
 
@@ -60,6 +60,14 @@ const buildCartItem = ({ product, quantity, user }) => {
     quantity: normalizedQty,
     product,
     user,
+    // El descuento de despensa tiene que entrar acá también. Sin esto, tocar
+    // una línea de un carrito armado desde Mi Despensa la devolvía a precio de
+    // lista SOLO en el carrito: al crear el pedido, rebuildItemsFromCart
+    // vuelve a aplicar el descuento a todas las líneas, así que el carrito
+    // mostraba un 7% de más. Como el envío gratis se decide por monto, ese 7%
+    // podía cruzar los $60.000 en la pantalla sin cruzarlos en el cobro: el
+    // cliente leía "Gratis" y Webpay le cobraba el despacho.
+    fromPantry,
   });
 
   return {
@@ -277,6 +285,7 @@ export const addItem = asyncHandler(async (req, res) => {
     product,
     quantity: newQty,
     user: req.user,
+    fromPantry: Boolean(cart.from_pantry),
   });
 
   // Reservar el delta ANTES de guardar el carrito: si no hay disponible,
@@ -331,6 +340,7 @@ export const updateItem = asyncHandler(async (req, res) => {
     product,
     quantity: Number(quantity),
     user: req.user,
+    fromPantry: Boolean(cart.from_pantry),
   });
 
   const prevUnits = Number(cart.items[idx].quantity || 0);
