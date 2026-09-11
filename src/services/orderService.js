@@ -424,11 +424,41 @@ const computeOrderTotals = ({ subtotal, shippingAmount, discountAmount }) => {
   };
 };
 
-const resolveShippingAmount = ({ items, shipping }) => {
-  const orderLike = { items, shipping };
+/**
+ * Un pedido de $0 no se puede pagar y no se puede cobrar.
+ *
+ * Mientras el despacho costó siempre 3.990, esos 3.990 tapaban el caso: el
+ * total nunca llegaba a cero por mucho que descontara el cupón, porque
+ * computeOrderTotals topea el descuento al subtotal pero después suma el flete.
+ * Con envío gratis el tope deja de estar tapado: un cupón del 100% sobre un
+ * carrito que llega al mínimo da total 0 exacto.
+ *
+ * Sin este freno la orden NACE igual, con su stock comprometido, y recién
+ * revienta al pedirle la transacción a Webpay (que rechaza montos <= 0). El
+ * cliente ve un error genérico, el pedido queda pendiente y el stock bloqueado
+ * hasta que lo cancele el trabajo de expiración. Es mejor no crearla.
+ */
+const assertTotalCobrable = (totals) => {
+  if (Number(totals?.total) > 0) return;
+  throw new BadRequestError(
+    "El descuento cubre el pedido completo y no queda nada que cobrar. " +
+      "Quita el cupón o agrega algún producto.",
+    { couponCode: "El descuento deja el total en cero" },
+  );
+};
+
+const resolveShippingAmount = ({ items, subtotal, shipping }) => {
+  // El subtotal viaja explícito además de los ítems: la cotización lo usa para
+  // decidir si el pedido llega al mínimo de envío gratis, y este es el MISMO
+  // número que va a quedar guardado en la orden. Dejar que la cotización lo
+  // sume por su cuenta daría lo mismo hoy, pero bastaría con que alguien
+  // cambiara la forma de sumar en un lado para que el pedido se guardara con
+  // un despacho distinto del que se cotizó.
+  const orderLike = { items, subtotal, shipping };
   const quote = quoteShippingForOrder(orderLike);
   return {
     amount: Number(quote.selected?.amount || 0),
+    envio_gratis: !!quote.selected?.envio_gratis,
     service_name: quote.selected?.service_name || null,
     service_code: quote.selected?.service_code || null,
     carrier: quote.selected?.carrier || CARRIER_DESPACHO,
@@ -610,7 +640,14 @@ export const createOrderFromCart = async ({
 
     // El monto del despacho SIEMPRE lo pone el servidor (tarifa plana de la
     // zona), nunca el cliente.
-    const shippingResolved = resolveShippingAmount({ items, shipping });
+    // El despacho se resuelve ANTES que el cupón, y es a propósito: el mínimo
+    // de envío gratis se mide sobre el subtotal bruto de la mercadería. Mover
+    // esta línea después de resolveCouponDiscount para medir sobre el subtotal
+    // ya descontado es justo lo que alguien va a querer "arreglar" algún día, y
+    // rompería la tienda: los cuatro endpoints de /api/shipping cotizan sin
+    // saber nada de cupones, así que el carrito mostraría un despacho y el
+    // pedido cobraría otro. La explicación larga está en config/despacho.js.
+    const shippingResolved = resolveShippingAmount({ items, subtotal, shipping });
     const shippingAmount = shippingResolved.amount;
 
     const couponResolved = await resolveCouponDiscount({
@@ -626,6 +663,7 @@ export const createOrderFromCart = async ({
       shippingAmount,
       discountAmount: couponResolved.discount,
     });
+    assertTotalCobrable(totals);
 
     const guestToken = identity.userId ? null : issueGuestToken();
     const guestTokenHash = guestToken ? hashGuestToken(guestToken) : null;
@@ -698,7 +736,14 @@ export const createOrderFromCustomBox = async ({
       session,
     });
 
-    const shippingResolved = resolveShippingAmount({ items, shipping });
+    // El despacho se resuelve ANTES que el cupón, y es a propósito: el mínimo
+    // de envío gratis se mide sobre el subtotal bruto de la mercadería. Mover
+    // esta línea después de resolveCouponDiscount para medir sobre el subtotal
+    // ya descontado es justo lo que alguien va a querer "arreglar" algún día, y
+    // rompería la tienda: los cuatro endpoints de /api/shipping cotizan sin
+    // saber nada de cupones, así que el carrito mostraría un despacho y el
+    // pedido cobraría otro. La explicación larga está en config/despacho.js.
+    const shippingResolved = resolveShippingAmount({ items, subtotal, shipping });
     const shippingAmount = shippingResolved.amount;
 
     const couponResolved = await resolveCouponDiscount({
@@ -714,6 +759,7 @@ export const createOrderFromCustomBox = async ({
       shippingAmount,
       discountAmount: couponResolved.discount,
     });
+    assertTotalCobrable(totals);
 
     const guestToken = identity.userId ? null : issueGuestToken();
     const guestTokenHash = guestToken ? hashGuestToken(guestToken) : null;

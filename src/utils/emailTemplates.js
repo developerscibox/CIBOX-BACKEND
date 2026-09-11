@@ -129,6 +129,27 @@ export const buildResetPasswordTemplate = ({ name, resetUrl }) => {
 
 const money = (value) => `$${Number(value || 0).toLocaleString("es-CL")}`;
 
+/**
+ * Lo que va en la línea "Envío" de un correo. Devuelve TEXTO PLANO: quien lo
+ * imprime decide si lo escapa y con qué estilo.
+ *
+ * Un despacho en 0 puede significar dos cosas distintas y la palabra no es la
+ * misma. Si el pedido es a domicilio, el cero es la promoción del envío gratis
+ * y se dice "Gratis". Si es un retiro —ya no se venden así, pero quedan pedidos
+ * viejos en la base y los correos se pueden reenviar—, el cero es que no hubo
+ * despacho que cobrar, y escribir "Gratis" ahí sería anunciar un regalo que no
+ * existió.
+ *
+ * La línea NO se oculta cuando vale 0, al revés de lo que hace la de Descuento:
+ * un correo sin línea de envío se lee como que el pedido no se despachó.
+ */
+export const textoDespacho = (order) => {
+  const monto = Number(order?.shipping_amount || 0);
+  if (monto > 0) return money(monto);
+  if (order?.delivery_method === "pickup") return "Sin despacho (retiro)";
+  return "Gratis";
+};
+
 const formatDate = (date) =>
   date
     ? new Date(date).toLocaleString("es-CL", {
@@ -266,7 +287,7 @@ Productos:
 ${sourceLabelText}${productsText}
 
 Subtotal: ${money(order.subtotal)}
-Envío: ${money(order.shipping_amount)}
+Envío: ${textoDespacho(order)}
 Descuento: ${money(order.discount_amount)}
 Total pagado: ${money(order.total)}
 
@@ -319,7 +340,7 @@ Gracias por comprar en CIBOX.
 
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-top:6px;">
         <tr><td style="padding:6px 8px;font-size:14px;color:${C.gris};">Subtotal</td><td align="right" style="padding:6px 8px;font-size:14px;color:${C.texto};">${escapeHtml(money(order.subtotal))}</td></tr>
-        <tr><td style="padding:6px 8px;font-size:14px;color:${C.gris};">Envío</td><td align="right" style="padding:6px 8px;font-size:14px;color:${C.texto};">${escapeHtml(money(order.shipping_amount))}</td></tr>
+        <tr><td style="padding:6px 8px;font-size:14px;color:${C.gris};">Envío</td><td align="right" style="padding:6px 8px;font-size:14px;color:${C.texto};">${escapeHtml(textoDespacho(order))}</td></tr>
         ${Number(order.discount_amount) > 0 ? `<tr><td style="padding:6px 8px;font-size:14px;color:${C.gris};">Descuento</td><td align="right" style="padding:6px 8px;font-size:14px;color:#1D7A4C;">−${escapeHtml(money(order.discount_amount))}</td></tr>` : ""}
         <tr><td style="padding:12px 8px 6px;font-size:16px;font-weight:800;color:${C.azul};border-top:2px solid ${C.azul};">Total pagado</td><td align="right" style="padding:12px 8px 6px;font-size:20px;font-weight:900;color:${C.azul};border-top:2px solid ${C.azul};">${escapeHtml(money(order.total))}</td></tr>
       </table>

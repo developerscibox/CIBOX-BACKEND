@@ -1,8 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 
 import {
   TARIFA_PLANA_CLP,
+  ENVIO_GRATIS_DESDE_CLP,
+  costoDespacho,
+  hayEnvioGratis,
   COMUNAS_CON_REPARTO,
   REGION_REPARTO,
   comunaDeReparto,
@@ -124,6 +128,10 @@ test("el peso ya no cambia el precio del despacho", () => {
 test("la tarifa vive en un solo sitio y sale también por la API pública", () => {
   const publico = publicDespacho();
   assert.equal(publico.tarifa_plana_clp, TARIFA_PLANA_CLP);
+  // La tienda no puede hardcodear el mínimo de envío gratis: lo lee de acá.
+  // Si este campo desaparece, la tienda se queda con su respaldo y termina
+  // prometiendo un mínimo distinto del que cobra el servidor.
+  assert.equal(publico.envio_gratis_desde_clp, ENVIO_GRATIS_DESDE_CLP);
   assert.deepEqual(publico.comunas, COMUNAS_CON_REPARTO);
   assert.equal(publico.region, REGION_REPARTO);
   // La tienda lee esto para saber que no debe ofrecer retiro.
@@ -231,4 +239,153 @@ test("los pedidos viejos por transferencia y de retiro siguen siendo válidos pa
     );
   }
   assert.ok(Order.schema.path("delivery_method").enumValues.includes("pickup"));
+});
+
+/* ─────────────────────────── envío gratis ────────────────────────────────── */
+
+// El mínimo se mide sobre la MERCADERÍA, antes de cupones, y con >=. Las dos
+// decisiones están explicadas en src/config/despacho.js; acá se fijan para que
+// no se muevan sin que nadie se entere.
+
+const pedidoDe = (subtotal, extra = {}) => ({
+  shipping: DIRECCION_EN_ZONA,
+  items: [{ quantity: 1, weight: { value: 500, unit: "g" } }],
+  subtotal,
+  ...extra,
+});
+
+test("el mínimo de envío gratis es 60.000", () => {
+  // Se cambia en src/config/despacho.js o con DESPACHO_ENVIO_GRATIS_CLP.
+  // Si alguien mueve el monto, esta prueba avisa que hay textos que actualizar.
+  assert.equal(ENVIO_GRATIS_DESDE_CLP, 60000);
+});
+
+test("justo en el mínimo el despacho ya es gratis, un peso menos no", () => {
+  assert.equal(
+    quoteShippingForOrder(pedidoDe(ENVIO_GRATIS_DESDE_CLP)).selected.amount,
+    0,
+    "quien llega justo al mínimo tiene que llevarse el despacho",
+  );
+  assert.equal(
+    quoteShippingForOrder(pedidoDe(ENVIO_GRATIS_DESDE_CLP - 1)).selected.amount,
+    TARIFA_PLANA_CLP,
+  );
+});
+
+test("el envío gratis vale en las cuatro comunas por igual", () => {
+  for (const comuna of COMUNAS_CON_REPARTO) {
+    const quote = quoteShippingForOrder(
+      pedidoDe(ENVIO_GRATIS_DESDE_CLP, {
+        shipping: { ...DIRECCION_EN_ZONA, city: comuna },
+      }),
+    );
+    assert.equal(quote.selected.amount, 0, `${comuna} cobró despacho de más`);
+  }
+});
+
+test("sin subtotal propio, el monto se suma de las líneas del pedido", () => {
+  // Es el caso de la creación del pedido desde el carrito: los ítems traen su
+  // subtotal calculado por el servidor.
+  const gratis = quoteShippingForOrder({
+    shipping: DIRECCION_EN_ZONA,
+    items: [{ quantity: 2, subtotal: 30000 }, { quantity: 1, subtotal: 30000 }],
+  });
+  assert.equal(gratis.selected.amount, 0);
+  assert.equal(gratis.meta.subtotal_considerado, 60000);
+
+  const cobra = quoteShippingForOrder({
+    shipping: DIRECCION_EN_ZONA,
+    items: [{ quantity: 2, subtotal: 30000 }, { quantity: 1, subtotal: 29999 }],
+  });
+  assert.equal(cobra.selected.amount, TARIFA_PLANA_CLP);
+});
+
+test("un pedido del que no se sabe el monto PAGA el despacho", () => {
+  // La dirección segura del error. Un preview que no logró valorizar el
+  // carrito tiene que cobrar, nunca regalar: cobrar de más se reclama y se
+  // corrige, regalar de más no se recupera.
+  const sinPlata = quoteShippingForOrder({
+    shipping: DIRECCION_EN_ZONA,
+    items: [{ product_id: "x", quantity: 3, weight: { value: 1, unit: "kg" } }],
+  });
+  assert.equal(sinPlata.selected.amount, TARIFA_PLANA_CLP);
+  assert.equal(sinPlata.meta.subtotal_considerado, 0);
+
+  assert.equal(
+    quoteShippingForOrder({ shipping: DIRECCION_EN_ZONA }).selected.amount,
+    TARIFA_PLANA_CLP,
+  );
+});
+
+test("la cotización deja dicho por qué salió gratis", () => {
+  // Un despacho en 0 sin rastro de la razón es imposible de auditar después.
+  const quote = quoteShippingForOrder(pedidoDe(75000));
+  assert.equal(quote.meta.envio_gratis, true);
+  assert.equal(quote.meta.source, "envio_gratis");
+  assert.equal(quote.meta.subtotal_considerado, 75000);
+  assert.equal(quote.meta.envio_gratis_desde, ENVIO_GRATIS_DESDE_CLP);
+  assert.equal(quote.selected.envio_gratis, true);
+
+  const cobrado = quoteShippingForOrder(pedidoDe(1000));
+  assert.equal(cobrado.meta.envio_gratis, false);
+  assert.equal(cobrado.meta.source, "tarifa_plana");
+});
+
+test("fuera de zona no hay envío gratis que valga: sigue rebotando", () => {
+  // El monto no puede comprar cobertura. Un pedido de 200.000 a Santiago tiene
+  // que fallar igual que uno de 1.000.
+  assert.throws(
+    () =>
+      quoteShippingForOrder({
+        shipping: { region: "Región Metropolitana", city: "Ñuñoa" },
+        subtotal: 200000,
+        items: [],
+      }),
+    /solo despachamos/i,
+  );
+});
+
+test("los ayudantes de config deciden lo mismo que la cotización", () => {
+  assert.equal(hayEnvioGratis(ENVIO_GRATIS_DESDE_CLP), true);
+  assert.equal(hayEnvioGratis(ENVIO_GRATIS_DESDE_CLP - 1), false);
+  assert.equal(costoDespacho(ENVIO_GRATIS_DESDE_CLP), 0);
+  assert.equal(costoDespacho(ENVIO_GRATIS_DESDE_CLP - 1), TARIFA_PLANA_CLP);
+  assert.equal(costoDespacho(0), TARIFA_PLANA_CLP);
+});
+
+test("con el mínimo en 0 la promoción queda apagada, no regalada", () => {
+  // config/despacho.js promete que poner 0 apaga el envío gratis. La lectura
+  // ingenua de "subtotal >= mínimo" haría exactamente lo contrario —todo
+  // gratis, para siempre— y nadie se enteraría hasta ver la primera boleta.
+  //
+  // El mínimo se lee del entorno al importar el módulo, así que la única forma
+  // honesta de probarlo es en otro proceso, con la variable puesta.
+  // Una sola línea, sin saltos que escapar: el hijo importa el módulo con la
+  // variable puesta y devuelve lo que decidió.
+  const guion =
+    'const c = await import("./src/config/despacho.js");' +
+    "console.log(JSON.stringify({" +
+    "umbral: c.ENVIO_GRATIS_DESDE_CLP," +
+    "gratisConMucho: c.hayEnvioGratis(9999999)," +
+    "costoConMucho: c.costoDespacho(9999999)," +
+    "publico: c.publicDespacho().envio_gratis_desde_clp" +
+    "}));";
+
+  const salida = execFileSync(
+    process.execPath,
+    ["--input-type=module", "-e", guion],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, DESPACHO_ENVIO_GRATIS_CLP: "0" },
+    },
+  );
+
+  // dotenvx escribe su propia línea antes de la nuestra: nos quedamos con la
+  // última, que es el JSON.
+  const r = JSON.parse(salida.trim().split("\n").pop());
+  assert.equal(r.umbral, 0);
+  assert.equal(r.gratisConMucho, false, "con el mínimo en 0 nada es gratis");
+  assert.equal(r.costoConMucho, TARIFA_PLANA_CLP);
+  assert.equal(r.publico, 0, "la tienda tiene que poder leer el apagado");
 });

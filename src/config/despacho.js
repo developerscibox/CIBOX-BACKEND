@@ -21,6 +21,10 @@
  *   lo que se cobra sin cambiar lo que se muestra. El arreglo de fondo es que
  *   la tienda consuma /api/config/despacho y borre su copia.
  *
+ *   ENVIO_GRATIS_DESDE_CLP — desde este monto de mercadería el despacho no se
+ *   cobra. Mismas dos vías (el número de abajo, o DESPACHO_ENVIO_GRATIS_CLP).
+ *   Poner 0 apaga la promoción y vuelve a cobrarse siempre la tarifa plana.
+ *
  *   ▲▲▲  EL PRECIO DEL DESPACHO SE CAMBIA AQUÍ  ▲▲▲
  */
 
@@ -34,6 +38,44 @@ export const TARIFA_PLANA_CLP = Math.max(
   0,
   Math.round(Number(env("DESPACHO_TARIFA_CLP", "3990")) || 0),
 );
+
+/**
+ * Monto de mercadería desde el cual el despacho sale gratis (CLP, entero).
+ * 0 apaga la promoción.
+ */
+export const ENVIO_GRATIS_DESDE_CLP = Math.max(
+  0,
+  Math.round(Number(env("DESPACHO_ENVIO_GRATIS_CLP", "60000")) || 0),
+);
+
+/**
+ * ¿Este pedido se lleva el despacho gratis?
+ *
+ * Se mide sobre el subtotal de la MERCADERÍA, antes de cualquier descuento de
+ * cupón. La razón es de arquitectura, no de marketing: el despacho se cotiza en
+ * seis caminos distintos (los cuatro endpoints de /api/shipping, la creación
+ * desde el carrito y la del custom box) y cuatro de ellos no saben nada de
+ * cupones. Midiendo antes del descuento, los seis dan el mismo número, así que
+ * la vista previa del carrito y lo que Webpay cobra no se pueden separar nunca
+ * —que es la única falla de verdad grave acá—. Medirlo después del cupón
+ * arreglaría una fuga que hoy no existe (la base de producción tiene CERO
+ * cupones) a cambio de meter esa separación.
+ *
+ * Si algún día se crean cupones grandes, la fuga es real: un 50% sobre un
+ * carrito de 60.000 se lleva el despacho gratis pagando 30.000. Cuando eso pase,
+ * el arreglo es exigir el mínimo sobre `subtotal - descuento` Y hacer que los
+ * endpoints de cotización reciban el cupón, no solo lo primero.
+ *
+ * El `>=` es deliberado: quien llega justo a 60.000 esperando envío gratis y se
+ * lo cobramos por un peso tiene razón en reclamar.
+ */
+export const hayEnvioGratis = (subtotalCLP) =>
+  ENVIO_GRATIS_DESDE_CLP > 0 &&
+  Math.round(Number(subtotalCLP) || 0) >= ENVIO_GRATIS_DESDE_CLP;
+
+/** Lo que cuesta el despacho para un pedido de este subtotal. */
+export const costoDespacho = (subtotalCLP) =>
+  hayEnvioGratis(subtotalCLP) ? 0 : TARIFA_PLANA_CLP;
 
 /** Nombre que ve el cliente en el detalle del pedido y en la boleta. */
 export const NOMBRE_SERVICIO_DESPACHO = "Despacho zona Rancagua";
@@ -141,6 +183,7 @@ export const zonaDeDespacho = ({ region, comuna } = {}) => {
  */
 export const publicDespacho = () => ({
   tarifa_plana_clp: TARIFA_PLANA_CLP,
+  envio_gratis_desde_clp: ENVIO_GRATIS_DESDE_CLP,
   nombre_servicio: NOMBRE_SERVICIO_DESPACHO,
   region: REGION_REPARTO,
   comunas: [...COMUNAS_CON_REPARTO],
@@ -150,6 +193,7 @@ export const publicDespacho = () => ({
 
 export default {
   TARIFA_PLANA_CLP,
+  ENVIO_GRATIS_DESDE_CLP,
   REGION_REPARTO,
   COMUNAS_CON_REPARTO,
 };

@@ -3,8 +3,10 @@ import { logger } from "../utils/logger.js";
 import { BadRequestError } from "../utils/errors.js";
 import {
   TARIFA_PLANA_CLP,
+  ENVIO_GRATIS_DESDE_CLP,
   NOMBRE_SERVICIO_DESPACHO,
   CARRIER_DESPACHO,
+  hayEnvioGratis,
   zonaDeDespacho,
 } from "../config/despacho.js";
 
@@ -186,16 +188,56 @@ export const quoteManualShippingForOrder = (order) => {
 /* --------------------- tarifa plana zona Rancagua ------------------------ */
 
 /**
+ * Cuánto vale la mercadería de este pedido, en pesos enteros. Es el número
+ * contra el que se decide el envío gratis.
+ *
+ * Orden de preferencia, de más confiable a menos:
+ *  1. `order.subtotal` — lo escribió el servidor al crear el pedido.
+ *  2. La suma de los `subtotal` de línea — los escribe el carrito o la
+ *     reconstrucción de ítems, también en el servidor.
+ *  3. precio × cantidad — último recurso.
+ *
+ * Si no hay ninguna de las tres, devuelve 0, y 0 nunca llega al mínimo: un
+ * pedido del que no sabemos el monto PAGA el despacho. Es la dirección segura
+ * del error. Lo que no puede pasar es lo contrario —regalar el despacho por no
+ * saber cuánto vale el carrito—, y menos aún que un cliente consiga el cero
+ * mandando precios inventados: quien llama con ítems venidos del navegador
+ * tiene que resolver los precios contra la base ANTES de cotizar
+ * (ver previewShippingFromItems en el controlador).
+ */
+const subtotalDeMercaderia = (order) => {
+  const guardado = Number(order?.subtotal);
+  if (Number.isFinite(guardado) && guardado > 0) return Math.round(guardado);
+
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const sumado = items.reduce((acc, it) => {
+    const linea = Number(it?.subtotal);
+    if (Number.isFinite(linea) && linea > 0) return acc + linea;
+    const precio = Number(it?.price ?? it?.unit_price) || 0;
+    const cantidad = Number(it?.quantity) || 0;
+    return acc + precio * cantidad;
+  }, 0);
+
+  // Se redondea UNA vez y al final, con el mismo Math.round que usa
+  // computeOrderTotals para guardar `subtotal` en la orden. Tiene que ser el
+  // mismo: si aquí redondeáramos distinto, un carrito en el filo del mínimo
+  // podría cotizarse gratis y guardarse cobrando (o al revés).
+  return Math.max(0, Math.round(sumado));
+};
+
+/**
  * PUNTO ÚNICO DE COTIZACIÓN del backend. Lo llaman la creación de pedidos
  * (carrito y custom box) y los cuatro endpoints de /api/shipping
  * (preview, preview-items, quote, apply). Por eso la regla de cobertura vive
  * aquí: puesta en este único sitio queda aplicada en los seis caminos a la vez,
  * incluido /apply, que permite cambiar la comuna de un pedido ya creado.
  *
- * Dos cosas y nada más:
+ * Tres cosas y nada más:
  *  1. La dirección tiene que estar en la zona de reparto, o no hay venta.
  *  2. Dentro de la zona el despacho cuesta siempre lo mismo, sin importar el
  *     peso ni la comuna (tarifa plana de config/despacho.js).
+ *  3. Salvo que la mercadería llegue al mínimo de envío gratis, y entonces no
+ *     se cobra.
  *
  * Lanza BadRequestError con `details` por campo para que el checkout pinte el
  * error en la comuna y no en un cartel genérico.
@@ -210,7 +252,9 @@ export const quoteShippingForOrder = (order) => {
     throw new BadRequestError(zona.mensaje, { [zona.campo]: zona.mensaje });
   }
 
-  const amount = TARIFA_PLANA_CLP;
+  const subtotal = subtotalDeMercaderia(order);
+  const gratis = hayEnvioGratis(subtotal);
+  const amount = gratis ? 0 : TARIFA_PLANA_CLP;
 
   // El peso ya no cambia el precio, pero se sigue calculando porque bodega lo
   // usa para armar el bulto y para el remito.
@@ -225,6 +269,7 @@ export const quoteShippingForOrder = (order) => {
     region: zona.region,
     comuna: zona.comuna,
     weight_grams: weightGrams,
+    envio_gratis: gratis,
   };
 
   return {
@@ -234,12 +279,18 @@ export const quoteShippingForOrder = (order) => {
       service_name: service.service_name,
       amount,
       carrier: CARRIER_DESPACHO,
+      envio_gratis: gratis,
     },
     meta: {
-      source: "tarifa_plana",
+      source: gratis ? "envio_gratis" : "tarifa_plana",
       region: zona.region,
       comuna: zona.comuna,
       weight_grams: weightGrams,
+      // Qué se miró para decidir y contra qué. Sin esto, un pedido con despacho
+      // 0 no deja rastro de por qué salió gratis.
+      subtotal_considerado: subtotal,
+      envio_gratis_desde: ENVIO_GRATIS_DESDE_CLP,
+      envio_gratis: gratis,
     },
   };
 };

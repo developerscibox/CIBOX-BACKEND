@@ -15,7 +15,10 @@ import {
 import { findOrderForOwner } from "../services/orderService.js";
 import { createShipmentForPaidOrder } from "../services/shippingService.js";
 import { ORDER_STATUS, PAYMENT_STATUS } from "../utils/constants.js";
-import { buildPaymentApprovedTemplate } from "../utils/emailTemplates.js";
+import {
+  buildPaymentApprovedTemplate,
+  textoDespacho,
+} from "../utils/emailTemplates.js";
 import mongoose from "mongoose";
 
 const sanitizeOrder = (order) =>
@@ -187,7 +190,7 @@ Productos:
 ${itemsText}
 
 Subtotal: ${money(order.subtotal)}
-Envío: ${money(order.shipping_amount)}
+Envío: ${textoDespacho(order)}
 Descuento: ${money(order.discount_amount)}
 Total pagado: ${money(order.total)}
 
@@ -210,7 +213,7 @@ ${order.shipping?.address || "—"}, ${order.shipping?.city || "—"}, ${order.s
 
         <h3>Totales</h3>
         <p><strong>Subtotal:</strong> ${money(order.subtotal)}</p>
-        <p><strong>Envío:</strong> ${money(order.shipping_amount)}</p>
+        <p><strong>Envío:</strong> ${textoDespacho(order)}</p>
         <p><strong>Descuento:</strong> ${money(order.discount_amount)}</p>
         <p><strong>Total pagado:</strong> ${money(order.total)}</p>
 
