@@ -10,7 +10,8 @@ import {
 } from "../utils/errors.js";
 import { ORDER_STATUS, VALID_TRANSITIONS } from "../utils/constants.js";
 
-import { lineaDeTiempo, avancePct, CLIENT_COPY } from "../pedidos/estados.js";
+import { lineaDeTiempo, avancePct, copyCliente } from "../pedidos/estados.js";
+import { notificarCambioDeEstado } from "./notificacionesPedidoService.js";
 const getOrderModel = () => {
   if (!mongoose.models.Order) {
     throw new Error("Order model not registered");
@@ -101,49 +102,57 @@ const MAX_PEDIDOS_POR_CORREO = 100;
  * la línea de tiempo, NO se filtra solo por estar ahí. Hay que sumarlo aquí a
  * mano, y esa es justamente la idea.
  */
-const buildPublicTracking = (order) => ({
-  orderId: String(order._id),
-  folio: folioDe(order._id),
-  status: order.status,
-  estado: CLIENT_COPY[order.status]?.titulo || order.status,
-  detalle: CLIENT_COPY[order.status]?.detalle || "",
-  delivery_method: order.delivery_method || "delivery",
-  avance_pct: avancePct(order),
-  // Línea de tiempo: la máquina de estados (pedidos/estados.js) cruzada con el
-  // status_history del pedido. Se copian los campos uno por uno para dejar FUERA
-  // el `por` que trae lineaDeTiempo(): ese campo publica el NOMBRE de la persona
-  // de bodega que ejecutó cada etapa. Es dato del personal, no del pedido, y no
-  // tiene por qué llegarle a alguien que solo acertó un folio y un correo.
-  timeline: lineaDeTiempo(order).map((paso) => ({
-    estado: paso.estado,
-    titulo: paso.titulo,
-    detalle: paso.detalle,
-    cumplido: paso.cumplido,
-    actual: paso.actual,
-    fecha: paso.fecha,
-    ...(paso.anomalo ? { anomalo: true } : {}),
-  })),
-  created_at: order.created_at || null,
-  delivered_at: order.delivered_at || null,
-  // Lo que pagó. Es su propia compra y le sirve para reconocer el pedido; los
-  // precios línea por línea, en cambio, no se publican.
-  total: Number(order.total || 0),
-  shipping: {
-    carrier: order.shipping?.carrier || null,
-    tracking_number: order.shipping?.tracking_number || null,
-    shipment_status: order.shipping?.shipment_status || null,
-    estimated_delivery: order.shipping?.estimated_delivery || null,
-  },
-  pickup: order.delivery_method === "pickup"
-    ? { location: order.pickup?.location || null, committed_date: order.pickup?.committed_date || null }
-    : null,
-  items: Array.isArray(order.items)
-    ? order.items.map((it) => ({
-        name: it.name || "",
-        quantity: Number(it.quantity || 0),
-      }))
-    : [],
-});
+const buildPublicTracking = (order) => {
+  // La copia depende del tipo de entrega: un pedido "listo" con despacho va a
+  // salir a reparto; uno de retiro está esperando que lo pasen a buscar.
+  const copy = copyCliente(order.status, order.delivery_method || "delivery");
+  return {
+    orderId: String(order._id),
+    folio: folioDe(order._id),
+    status: order.status,
+    estado: copy.titulo,
+    detalle: copy.detalle,
+    // Qué viene después. Es texto fijo de la máquina de estados (no sale del
+    // pedido ni de la persona), así que sumarlo a la lista blanca no expone nada.
+    siguiente: copy.siguiente,
+    delivery_method: order.delivery_method || "delivery",
+    avance_pct: avancePct(order),
+    // Línea de tiempo: la máquina de estados (pedidos/estados.js) cruzada con el
+    // status_history del pedido. Se copian los campos uno por uno para dejar FUERA
+    // el `por` que trae lineaDeTiempo(): ese campo publica el NOMBRE de la persona
+    // de bodega que ejecutó cada etapa. Es dato del personal, no del pedido, y no
+    // tiene por qué llegarle a alguien que solo acertó un folio y un correo.
+    timeline: lineaDeTiempo(order).map((paso) => ({
+      estado: paso.estado,
+      titulo: paso.titulo,
+      detalle: paso.detalle,
+      cumplido: paso.cumplido,
+      actual: paso.actual,
+      fecha: paso.fecha,
+      ...(paso.anomalo ? { anomalo: true } : {}),
+    })),
+    created_at: order.created_at || null,
+    delivered_at: order.delivered_at || null,
+    // Lo que pagó. Es su propia compra y le sirve para reconocer el pedido; los
+    // precios línea por línea, en cambio, no se publican.
+    total: Number(order.total || 0),
+    shipping: {
+      carrier: order.shipping?.carrier || null,
+      tracking_number: order.shipping?.tracking_number || null,
+      shipment_status: order.shipping?.shipment_status || null,
+      estimated_delivery: order.shipping?.estimated_delivery || null,
+    },
+    pickup: order.delivery_method === "pickup"
+      ? { location: order.pickup?.location || null, committed_date: order.pickup?.committed_date || null }
+      : null,
+    items: Array.isArray(order.items)
+      ? order.items.map((it) => ({
+          name: it.name || "",
+          quantity: Number(it.quantity || 0),
+        }))
+      : [],
+  };
+};
 
 export const getTrackingByToken = async ({ orderId, token, userId }) => {
   const Order = getOrderModel();
@@ -286,7 +295,11 @@ export const processBlueExpressWebhook = async (body) => {
     throw new BadRequestError("tracking_number requerido en el webhook");
   }
 
-  return withTransaction(async (session) => {
+  // Si el evento del courier mueve order.status, se anota aquí y se avisa al
+  // cliente DESPUÉS de que la transacción quedó confirmada (nunca adentro).
+  let aviso = null;
+
+  const resultado = await withTransaction(async (session) => {
     const order = await Order.findOne({
       "shipping.tracking_number": trackingNumber,
     }).session(session);
@@ -320,12 +333,14 @@ export const processBlueExpressWebhook = async (body) => {
     ) {
       order.status = ORDER_STATUS.DELIVERED;
       order.delivered_at = new Date();
+      aviso = { order, status: ORDER_STATUS.DELIVERED };
     } else if (
       status === "in_transit" &&
       allowedTransitions.includes(ORDER_STATUS.SHIPPED)
     ) {
       order.status = ORDER_STATUS.SHIPPED;
       order.shipped_at = new Date();
+      aviso = { order, status: ORDER_STATUS.SHIPPED, trackingNumber };
     }
 
     await order.save({ session });
@@ -342,4 +357,7 @@ export const processBlueExpressWebhook = async (body) => {
 
     return { processed: true, orderId: String(order._id), status };
   });
+
+  if (aviso) notificarCambioDeEstado(aviso).catch(() => {});
+  return resultado;
 };

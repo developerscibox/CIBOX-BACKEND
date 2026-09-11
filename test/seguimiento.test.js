@@ -286,6 +286,49 @@ test("los items van con nombre y cantidad, sin precios", async () => {
   }
 });
 
+/* ═══════════ lo que lee el cliente depende del tipo de entrega ═════════════ */
+
+test("el seguimiento le dice al cliente qué viene después", async () => {
+  instalarModelo(soloAna()); // en preparación, con despacho
+  const data = await tracking.lookupPublicTracking({ folio: "CCB517", email: CORREO });
+  assert.equal(data.estado, "Preparando tu pedido");
+  assert.equal(data.siguiente, "Te avisaremos cuando esté listo para despacho.");
+});
+
+test("un pedido listo se lee 'para despacho' o 'para retirar' según cómo se entrega", async () => {
+  const historiaListo = [
+    ...pedidoBase().status_history,
+    { status: "ready", changed_at: "2026-09-01T15:00:00Z", changed_by: { label: "Marcela Soto" } },
+  ];
+
+  instalarModelo([
+    pedidoBase({
+      status: "ready",
+      delivery_method: "pickup",
+      status_history: historiaListo,
+      pickup: { location: "Bodega Cibox", committed_date: null },
+    }),
+  ]);
+  const retiro = await tracking.lookupPublicTracking({ folio: "CCB517", email: CORREO });
+  assert.equal(retiro.estado, "Listo para retirar");
+  assert.equal(retiro.detalle, "Tu pedido te espera en nuestra bodega.");
+  assert.equal(retiro.siguiente, "Cuando lo retires quedará como entregado.");
+  assert.equal(retiro.timeline.find((p) => p.estado === "ready").titulo, "Listo para retirar");
+
+  instalarModelo([pedidoBase({ status: "ready", status_history: historiaListo })]);
+  const despacho = await tracking.lookupPublicTracking({ folio: "CCB517", email: CORREO });
+  assert.equal(despacho.estado, "Listo para despacho");
+  assert.equal(despacho.siguiente, "Te avisaremos por correo cuando vaya en camino.");
+  assert.equal(despacho.timeline.find((p) => p.estado === "ready").titulo, "Listo para despacho");
+});
+
+test("el seguimiento por token también lleva el 'qué viene después'", async () => {
+  instalarModelo(soloAna());
+  const data = await tracking.getTrackingByToken({ orderId: ID_ANA, token: TOKEN_INVITADO, userId: null });
+  assert.equal(typeof data.siguiente, "string");
+  assert.ok(data.siguiente.length > 0);
+});
+
 /* ═════════ regresión: el seguimiento por token de invitado estaba muerto ═══ */
 
 test("el token de invitado autoriza (el hash viene con select:false y hay que pedirlo)", async () => {

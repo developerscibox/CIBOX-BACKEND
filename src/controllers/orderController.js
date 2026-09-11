@@ -13,11 +13,7 @@ import {
   NotFoundError,
 } from "../utils/errors.js";
 import { env } from "../config/env.js";
-import { logger } from "../utils/logger.js";
 import { relayBus } from "../utils/relayBus.js";
-import { sendEmail } from "../services/emailService.js";
-import { escapeHtml } from "../utils/emailTemplates.js";
-import { createNotification } from "../utils/notification.js";
 
 import {
   createOrderFromCart as svcCreateFromCart,
@@ -33,7 +29,7 @@ import {
 import {
   retryPayment as svcRetryPayment,
 } from "../services/paymentService.js";
-import { sendPushToUser } from "../services/pushService.js";
+import { notificarPedidoCreado } from "../services/notificacionesPedidoService.js";
 import { uploadImage as svcUploadImage } from "../services/uploadService.js";
 import { ROLES, PERMISSIONS, roleHasPermission, canRoleTransition } from "../utils/constants.js";
 
@@ -57,108 +53,6 @@ const sanitizeOrder = (order) => {
   const clone = { ...order };
   delete clone.guest_token_hash;
   return clone;
-};
-
-const sendOrderCreatedEmail = async ({ order }) => {
-  const email = order.customer?.email;
-  if (!email) return;
-
-  // El correo llevaba solo el total, pero el checkout y la pantalla de éxito
-  // prometen "un correo con el resumen de tu compra". Se incluyen los productos
-  // y la fecha comprometida de retiro para que el correo cumpla lo prometido.
-  const clp = (n) => "$" + Math.round(Number(n) || 0).toLocaleString("es-CL");
-  const folioCorto = "#" + String(order._id).slice(-6).toUpperCase();
-  const items = Array.isArray(order.items) ? order.items : [];
-  const detalleTxt = items
-    .map((it) => `  · ${it.quantity} × ${it.name} — ${clp(it.subtotal)}`)
-    .join("\n");
-  const detalleHtml = items
-    .map((it) => `<li>${it.quantity} × ${it.name} — <strong>${clp(it.subtotal)}</strong></li>`)
-    .join("");
-  const retiro = order.pickup?.committed_date
-    ? new Intl.DateTimeFormat("es-CL", { dateStyle: "full", timeZone: "America/Santiago" })
-        .format(new Date(order.pickup.committed_date))
-    : null;
-
-  // cash_on_pickup se paga AL RETIRAR: decirle "cuando completes el pago" a
-  // quien va a pagar en el mostrador confunde el flujo.
-  const cierre =
-    order.payment?.method === "cash_on_pickup"
-      ? "Pagas al retirar tu pedido."
-      : "Cuando completes el pago te avisaremos.";
-
-  // Todo pedido nuevo se despacha: el cliente necesita ver la dirección a la
-  // que va y cuánto se le cobró por llevarlo. (`retiro` solo aparece si se
-  // reenvía el correo de un pedido antiguo de retiro en bodega.)
-  const destino =
-    order.delivery_method !== "pickup"
-      ? [order.shipping?.address, order.shipping?.city].filter(Boolean).join(", ")
-      : "";
-
-  let text = `Hola ${order.customer.fullName || ""}, recibimos tu pedido ${folioCorto}.\n\n`;
-  if (detalleTxt) text += `Tu pedido:\n${detalleTxt}\n\n`;
-  if (destino) text += `Despacho a: ${destino} — ${clp(order.shipping_amount)}\n`;
-  text += `Total: ${clp(order.total)}\n`;
-  if (retiro) text += `Retiro comprometido: ${retiro}\n`;
-  text += `\n${cierre}`;
-
-  // El enlace para seguir el pedido, con el número ya puesto.
-  //
-  // Va aquí porque el correo es donde la persona vuelve a mirar cuando quiere
-  // saber en qué va su compra, y quien compró SIN CUENTA no tiene ningún otro
-  // registro: este correo y este número es todo lo que le queda. Sin el enlace
-  // dependía de acordarse de entrar a la tienda y encontrar la pantalla sola.
-  const urlSeguimiento =
-    String(env.FRONTEND_URL || "").replace(/\/+$/, "") +
-    "/seguir-mi-pedido?folio=" +
-    encodeURIComponent(folioCorto.replace("#", ""));
-  text += `\n\nPuedes seguir tu pedido acá:\n${urlSeguimiento}\n`;
-  text += `Te pedirá este número (${folioCorto}) y tu correo. No necesitas tener cuenta.`;
-
-  let html = `<p>Hola ${order.customer.fullName || ""},</p><p>Recibimos tu pedido <strong>${folioCorto}</strong>.</p>`;
-  if (detalleHtml) html += `<ul>${detalleHtml}</ul>`;
-  if (destino)
-    html += `<p>Despacho a: <strong>${escapeHtml(destino)}</strong> — ${clp(order.shipping_amount)}</p>`;
-  html += `<p>Total: <strong>${clp(order.total)}</strong></p>`;
-  if (retiro) html += `<p>Retiro comprometido: <strong>${retiro}</strong></p>`;
-  html += `<p>${cierre}</p>`;
-  html +=
-    `<p style="margin:22px 0"><a href="${escapeHtml(urlSeguimiento)}" ` +
-    `style="background:#B6D900;color:#17202A;text-decoration:none;font-weight:700;` +
-    `padding:12px 22px;border-radius:12px;display:inline-block">Seguir mi pedido</a></p>` +
-    `<p style="color:#5A6672;font-size:13px">Te pedirá este número ` +
-    `(<strong>${folioCorto}</strong>) y tu correo. No necesitas tener cuenta.</p>`;
-
-  // Transferencia: incluir datos bancarios (env BANK_TRANSFER_INFO, multilínea),
-  // el folio del pedido y la instrucción de subir el comprobante (auditoría H1).
-  if (order.payment?.method === "transfer") {
-    const folio = "#" + String(order._id).slice(-6).toUpperCase();
-    // Sin BANK_TRANSFER_INFO configurada, el correo salía con el literal
-    // "+56 9 XXXX XXXX" — un teléfono de relleno enviado al cliente real. Esa
-    // variable hoy no está definida en el servidor, así que era el texto que
-    // llegaba siempre. Mejor pedir contacto sin inventar un número.
-    const bankInfo =
-      String(env.BANK_TRANSFER_INFO || "").trim() ||
-      "Responde este correo y te enviamos los datos de transferencia.";
-    const bankInfoHtml = bankInfo
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .join("<br/>");
-    text += `\n\nPaga por transferencia bancaria a:\n${bankInfo}\n\nIndica el folio ${folio} en el comentario de la transferencia y luego sube el comprobante desde "Mis pedidos" para que confirmemos tu pago.`;
-    html += `<p><strong>Paga por transferencia bancaria a:</strong></p><p>${bankInfoHtml}</p><p>Indica el folio <strong>${folio}</strong> en el comentario de la transferencia y luego sube el comprobante desde <strong>"Mis pedidos"</strong> para que confirmemos tu pago.</p>`;
-  }
-
-  try {
-    await sendEmail({
-      to: email,
-      subject: `Orden creada #${String(order._id).slice(-8)}`,
-      text,
-      html,
-    });
-  } catch (err) {
-    logger.warn({ err: err.message }, "no se pudo enviar email de orden creada");
-  }
 };
 
 /* ------------------------------ handlers --------------------------------- */
@@ -190,10 +84,10 @@ export const createFromCart = asyncHandler(async (req, res) => {
     couponCode,
   });
 
-  // El correo no bloquea la creación del pedido: si el envío falla, el pedido
-  // ya está creado y cobrado, y tumbar la respuesta por eso deja al cliente
-  // sin confirmación de algo que sí ocurrió.
-  sendOrderCreatedEmail({ order: result.order }).catch(() => {});
+  // El correo "Recibimos tu pedido" no bloquea la creación: si el envío falla,
+  // el pedido ya está creado, y tumbar la respuesta por eso deja al cliente sin
+  // confirmación de algo que sí ocurrió.
+  notificarPedidoCreado({ order: result.order }).catch(() => {});
 
   return res.status(201).json({
     success: true,
@@ -225,7 +119,7 @@ export const createFromCustomBox = asyncHandler(async (req, res) => {
     couponCode,
   });
 
-  await sendOrderCreatedEmail({ order: result.order });
+  notificarPedidoCreado({ order: result.order }).catch(() => {});
 
   return res.status(201).json({
     success: true,
@@ -785,72 +679,9 @@ export const adminUpdateOrderStatus = asyncHandler(async (req, res) => {
     trackingNumber: tracking_number || null,
   });
 
-  // Email automático al cliente según el nuevo estado
-  const email = order.customer?.email;
-  if (email) {
-    try {
-      // Valores controlados por el usuario que se interpolan en HTML: SIEMPRE escapados
-      // (evita inyección de <a>/<img> de phishing en un correo del remitente legítimo).
-      const safeTracking = escapeHtml(tracking_number || "");
-      const safeNote = escapeHtml(note || "");
-      const safeName = escapeHtml(order.customer.fullName || "");
-      const messages = {
-        paid:      { subject: "Pago confirmado", body: "Tu pago fue confirmado. Estamos preparando tu pedido." },
-        preparing: { subject: "Preparando tu pedido", body: "Estamos preparando tu pedido. Pronto saldrá a despacho." },
-        ready:     { subject: "Pedido listo para despacho", body: "Tu pedido está preparado y saldrá a despacho en el próximo reparto." },
-        shipped: {
-          subject: "Tu pedido está en camino 🚚",
-          body: `Tu pedido está en camino.${safeTracking ? ` Número de seguimiento: <strong>${safeTracking}</strong>` : ""}`,
-        },
-        delivered: { subject: "Pedido entregado ✅", body: "Tu pedido fue entregado. ¡Gracias por comprar en CIBOX!" },
-        cancelled: { subject: "Orden cancelada", body: `Tu orden fue cancelada.${safeNote ? ` Motivo: ${safeNote}` : ""}` },
-      };
-
-      const msg = messages[status];
-      if (msg) {
-        await sendEmail({
-          to: email,
-          subject: `${msg.subject} — Orden #${String(order._id).slice(-6).toUpperCase()}`,
-          text: msg.body.replace(/<[^>]+>/g, ""),
-          html: `<p>Hola ${safeName},</p><p>${msg.body}</p><p>Orden #${String(order._id).slice(-6).toUpperCase()}</p>`,
-        });
-      }
-    } catch (err) {
-      logger.warn({ err: err.message }, "no se pudo enviar email de cambio de estado");
-    }
-  }
-
-  // Notificación in-app + Push al usuario
-  if (order.user_id) {
-    const shortId = String(order._id).slice(-6).toUpperCase();
-    const notifMessages = {
-      paid:      { title: "✅ Pago confirmado",          body: `Tu orden #${shortId} fue pagada. ¡Estamos preparándola!` },
-      preparing: { title: "📦 Preparando tu pedido",    body: `Tu orden #${shortId} está siendo preparada.` },
-      ready:     { title: "🧺 Pedido listo",             body: `Tu orden #${shortId} está preparada y lista para salir a despacho.` },
-      shipped:   { title: "🚚 ¡Tu pedido va en camino!", body: `Tu orden #${shortId} fue despachada.${tracking_number ? ` Seguimiento: ${tracking_number}` : ""}` },
-      delivered: { title: "🏠 Pedido entregado",        body: `Tu orden #${shortId} fue entregada. ¡Gracias por comprar en CIBOX!` },
-      cancelled: { title: "❌ Orden cancelada",          body: `Tu orden #${shortId} fue cancelada.${note ? ` Motivo: ${note}` : ""}` },
-    };
-    const msg = notifMessages[status];
-    if (msg) {
-      // Guardar en BD (pantalla de notificaciones)
-      createNotification({
-        user_id: order.user_id,
-        type: "order_status_changed",
-        title: msg.title,
-        body: msg.body,
-        data: { orderId: String(order._id), status },
-      }).catch(() => {});
-
-      // Enviar push al dispositivo
-      sendPushToUser({
-        userId: order.user_id,
-        title: msg.title,
-        body: msg.body,
-        data: { orderId: String(order._id), status },
-      }).catch(() => {});
-    }
-  }
+  // El aviso al cliente (correo + push/in-app) ya no vive aquí: lo dispara el
+  // servicio que persiste la transición (notificacionesPedidoService), así
+  // avisa igual el picking, el webhook del courier y los demás caminos.
 
   return res.status(200).json({ success: true, data: sanitizeOrder(order) });
 });

@@ -41,12 +41,14 @@ import { emitDocumentForOrder } from "./siiService.js";
 
 // Boleta (stub SII) best-effort: se emite tras CUALQUIER método de pago, no solo
 // Webpay. Idempotente (siiService deduplica por orden+tipo) y nunca rompe el pago.
+// Devuelve el documento (o null) para que el correo de pago lo pueda incluir.
 const emitBoletaBestEffort = async (order) => {
-  if (!order) return;
+  if (!order) return null;
   try {
-    await emitDocumentForOrder(order, "boleta");
+    return await emitDocumentForOrder(order, "boleta");
   } catch (err) {
     logger.warn({ orderId: String(order?._id || ""), err: err.message }, "boleta best-effort falló");
+    return null;
   }
 };
 import {
@@ -58,6 +60,9 @@ import {
   findFirstPurchaseAutoCoupon,
 } from "./couponService.js";
 import { quoteShippingForOrder } from "./shippingService.js";
+// Avisos al cliente (correo + push). Se disparan desde la función que persiste
+// cada transición, después de confirmar la escritura, y nunca lanzan.
+import { notificarCambioDeEstado } from "./notificacionesPedidoService.js";
 
 import { zonaDeDespacho, CARRIER_DESPACHO } from "../config/despacho.js";
 /* ------------------------------ helpers ---------------------------------- */
@@ -875,6 +880,9 @@ export const markAsPaid = async ({
   note = null,
   cash = null,
 } = {}) => {
+  // Solo se avisa al cliente si esta llamada fue la que pasó el pedido a
+  // pagado; la rama idempotente ("ya pagada") no debe mandar el correo otra vez.
+  let transicionado = false;
   const paid = await withTransaction(async (session) => {
     const order = await Order.findById(orderId).session(session);
     if (!order) throw new NotFoundError("Orden no encontrada");
@@ -943,6 +951,7 @@ export const markAsPaid = async ({
     });
 
     await order.save({ session });
+    transicionado = true;
 
     logger.info(
       { orderId: String(order._id), method: order.payment?.method },
@@ -950,7 +959,10 @@ export const markAsPaid = async ({
     );
     return order;
   });
-  await emitBoletaBestEffort(paid);
+  const boleta = await emitBoletaBestEffort(paid);
+  if (transicionado) {
+    notificarCambioDeEstado({ order: paid, status: ORDER_STATUS.PAID, taxDocument: boleta }).catch(() => {});
+  }
   return paid;
 };
 
@@ -972,6 +984,7 @@ export const markAsPaidCash = async ({
  * orden "retirada"/delivered aparte). Idempotente si ya estaba cobrada.
  */
 export const collectCashAtPickup = async ({ orderId, amountReceived, by = null }) => {
+  let cobrado = false;
   const paid = await withTransaction(async (session) => {
     const order = await Order.findById(orderId).session(session);
     if (!order) throw new NotFoundError("Orden no encontrada");
@@ -997,13 +1010,19 @@ export const collectCashAtPickup = async ({ orderId, amountReceived, by = null }
       by: by || { label: "operaciones" },
     });
     await order.save({ session });
+    cobrado = true;
     logger.info(
       { orderId: String(order._id), received, change: received - total },
       "efectivo cobrado al retiro",
     );
     return order;
   });
-  await emitBoletaBestEffort(paid);
+  const boleta = await emitBoletaBestEffort(paid);
+  // Mismo aviso "Pago confirmado" (con la boleta) que markAsPaid y Webpay. Solo
+  // cuando esta llamada registró el cobro: la rama idempotente no avisa de nuevo.
+  if (cobrado) {
+    notificarCambioDeEstado({ order: paid, status: ORDER_STATUS.PAID, taxDocument: boleta }).catch(() => {});
+  }
   return paid;
 };
 
@@ -1145,7 +1164,7 @@ export const cancelOrder = async ({
   by = null,
   movementType = MOVEMENT_TYPES.CANCELLATION,
 }) => {
-  return withTransaction(async (session) => {
+  const cancelada = await withTransaction(async (session) => {
     const order = await Order.findById(orderId)
       .select("+guest_token_hash")
       .session(session);
@@ -1263,6 +1282,13 @@ export const cancelOrder = async ({
     );
     return order;
   });
+  // Ya persistido: avisar al cliente (el motivo va en el correo).
+  notificarCambioDeEstado({
+    order: cancelada,
+    status: ORDER_STATUS.CANCELLED,
+    note: cancelada.cancellation_reason,
+  }).catch(() => {});
+  return cancelada;
 };
 
 /**
@@ -1276,7 +1302,7 @@ export const refundOrder = async ({
   byAdmin = false,
   by = null,
 } = {}) => {
-  return withTransaction(async (session) => {
+  const reembolsada = await withTransaction(async (session) => {
     const order = await Order.findById(orderId)
       .select("+guest_token_hash")
       .session(session);
@@ -1357,6 +1383,12 @@ export const refundOrder = async ({
     );
     return order;
   });
+  notificarCambioDeEstado({
+    order: reembolsada,
+    status: ORDER_STATUS.REFUNDED,
+    note: reason,
+  }).catch(() => {});
+  return reembolsada;
 };
 
 /**
@@ -1375,7 +1407,7 @@ export const commitOrderPick = async ({
   note = null,
   trackingNumber = null,
 }) => {
-  return withTransaction(async (session) => {
+  const confirmada = await withTransaction(async (session) => {
     const order = await Order.findById(orderId).session(session);
     if (!order) throw new NotFoundError("Orden no encontrada");
 
@@ -1471,6 +1503,12 @@ export const commitOrderPick = async ({
     await order.save({ session });
     return order;
   });
+  // "Listo para despacho" / "En camino": es el aviso que más espera el cliente
+  // y antes solo salía por PATCH /status, no por el botón "Listo" del picking.
+  notificarCambioDeEstado({ order: confirmada, status: targetStatus, trackingNumber, note }).catch(
+    () => {},
+  );
+  return confirmada;
 };
 
 export const transitionOrderStatus = async ({
@@ -1512,8 +1550,10 @@ export const transitionOrderStatus = async ({
     throw new ConflictError("Cobra el pedido antes de entregarlo");
   }
 
+  // Sin nota no se inventa un motivo: antes iba el literal "transition", que
+  // ahora llegaría al cliente como "Motivo: transition" en el correo de anulación.
   if (newStatus === ORDER_STATUS.CANCELLED) {
-    return cancelOrder({ orderId, reason: note || "transition", byAdmin, by });
+    return cancelOrder({ orderId, reason: note, byAdmin, by });
   }
 
   // PENDING→PAID por admin (transfer/cash_on_pickup): camino simple sin webpay
@@ -1559,6 +1599,10 @@ export const transitionOrderStatus = async ({
     "transición de orden aplicada",
   );
   emitRelayChange({ type: "status", id: String(order._id), status: newStatus });
+
+  // Camino "plano" (el estado se guardó recién arriba). Los estados que delegan
+  // en otra función (paid, cancelled, refunded, pick) avisan desde esa función.
+  notificarCambioDeEstado({ order, status: newStatus, trackingNumber, note }).catch(() => {});
 
   // Integración externa (Fase 6): al quedar empacado, el pedido se registra en
   // el software de seguimiento. Import dinámico para no crear un ciclo
