@@ -104,7 +104,7 @@ export const registerUser = async ({ name, email, password, phone = null, rut = 
   const tpl = buildVerificationTemplate({ name: user.name, verifyUrl });
 
   // No bloquea el registro si el email falla; emailService loguea el error.
-  await sendEmail({ to: user.email, subject: tpl.subject, text: tpl.text, html: tpl.html });
+  sendEmail({ to: user.email, subject: tpl.subject, text: tpl.text, html: tpl.html }).catch(() => {});
 
   return sanitizeUser(user);
 };
