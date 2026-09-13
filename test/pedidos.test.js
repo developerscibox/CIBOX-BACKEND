@@ -10,6 +10,8 @@ import {
   caminoDe,
   lineaDeTiempo,
   avancePct,
+  copyCliente,
+  CLIENT_COPY,
 } from "../src/pedidos/estados.js";
 
 // ── La máquina de estados ───────────────────────────────────────────────────
@@ -118,4 +120,58 @@ test("el avance va de 0 a 100 y un pedido anulado no muestra avance", () => {
   assert.equal(avancePct({ status: "delivered", delivery_method: "delivery" }), 100);
   assert.equal(avancePct({ status: "ready", delivery_method: "pickup" }), 75);
   assert.equal(avancePct({ status: "cancelled", delivery_method: "delivery" }), 0);
+});
+
+// ── Lo que lee el cliente depende del tipo de entrega ───────────────────────
+
+test("'listo' con despacho es 'Listo para despacho'; con retiro, 'Listo para retirar'", () => {
+  const despacho = copyCliente("ready", "delivery");
+  assert.equal(despacho.titulo, "Listo para despacho");
+  assert.equal(despacho.detalle, "Tu pedido está empacado y saldrá en el próximo reparto.");
+  assert.equal(despacho.siguiente, "Te avisaremos por correo cuando vaya en camino.");
+
+  const retiro = copyCliente("ready", "pickup");
+  assert.equal(retiro.titulo, "Listo para retirar");
+  assert.equal(retiro.detalle, "Tu pedido te espera en nuestra bodega.");
+  assert.equal(retiro.siguiente, "Cuando lo retires quedará como entregado.");
+});
+
+test("sin tipo de entrega se asume despacho, y CLIENT_COPY sigue siendo ese caso", () => {
+  assert.deepEqual(copyCliente("ready"), copyCliente("ready", "delivery"));
+  assert.equal(CLIENT_COPY.ready.titulo, "Listo para despacho");
+  assert.ok(!Object.values(CLIENT_COPY).some((c) => c.titulo === "Pedido listo"));
+});
+
+test("cada estado le dice al cliente qué viene después; los terminales no tienen después", () => {
+  assert.equal(copyCliente("pending").siguiente, "Cuando confirmemos el pago empezamos a preparar tu pedido.");
+  assert.equal(copyCliente("paid").siguiente, "Nuestro equipo lo tomará en la próxima tanda de preparación.");
+  assert.equal(copyCliente("preparing", "delivery").siguiente, "Te avisaremos cuando esté listo para despacho.");
+  assert.equal(copyCliente("preparing", "pickup").siguiente, "Te avisaremos cuando esté listo para retirar.");
+  assert.equal(copyCliente("shipped").detalle, "Tu pedido salió a reparto y va hacia tu dirección.");
+  assert.equal(copyCliente("shipped").siguiente, "Cuando lo recibas, quedará marcado como entregado.");
+  assert.equal(copyCliente("delivered").siguiente, "Si falta algo o algo llegó en mal estado, escríbenos y lo resolvemos.");
+  assert.equal(copyCliente("cancelled").siguiente, "");
+  assert.equal(copyCliente("refunded").siguiente, "");
+});
+
+test("el detalle y el 'qué viene después' nunca dicen lo mismo", () => {
+  for (const status of Object.keys(CLIENT_COPY)) {
+    for (const metodo of ["delivery", "pickup"]) {
+      const c = copyCliente(status, metodo);
+      assert.notEqual(c.detalle, c.siguiente, `${status}/${metodo} repite el texto`);
+    }
+  }
+});
+
+test("un estado que la máquina no conoce no rompe la vista del cliente", () => {
+  assert.deepEqual(copyCliente("inventado"), { titulo: "inventado", detalle: "", siguiente: "" });
+});
+
+test("la línea de tiempo usa la copia del tipo de entrega del pedido", () => {
+  const retiro = lineaDeTiempo({ status: "ready", delivery_method: "pickup", status_history: historia });
+  assert.equal(retiro.find((p) => p.estado === "ready").titulo, "Listo para retirar");
+  assert.equal(retiro.find((p) => p.estado === "ready").detalle, "Tu pedido te espera en nuestra bodega.");
+
+  const despacho = lineaDeTiempo({ status: "ready", delivery_method: "delivery", status_history: historia });
+  assert.equal(despacho.find((p) => p.estado === "ready").titulo, "Listo para despacho");
 });

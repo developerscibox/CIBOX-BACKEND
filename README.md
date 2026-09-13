@@ -6,6 +6,40 @@ Esta versión re-implementa el backend v1 manteniendo la misma estructura (`cont
 
 ---
 
+## Cómo se vende hoy (reglas del negocio)
+
+Tres reglas que el servidor hace cumplir, no la pantalla. Un pedido que llegue
+por API sin cumplirlas se rechaza igual que uno hecho desde la tienda:
+
+1. **Solo se paga con tarjeta** (Webpay Plus). La transferencia y el efectivo al
+   retirar se descontinuaron. Se rechazan en `validators/orderValidators.js` y
+   otra vez en `services/orderService.js` (`assertPagoConTarjeta`).
+2. **No hay retiro en bodega.** Todo pedido se despacha a domicilio.
+3. **Solo se despacha en la zona de Rancagua**: Rancagua, Machalí, Graneros y
+   Olivar, con **tarifa plana** por pedido (no depende del peso ni de la comuna).
+
+La cobertura y el precio del despacho, **para el backend**, viven en
+[`src/config/despacho.js`](src/config/despacho.js): ahí se cambia el monto (o
+sin deploy, con la variable `DESPACHO_TARIFA_CLP`). Ese es el valor que se
+cobra de verdad, porque el servidor lo recalcula en cada cotización y al crear
+el pedido. Se publica en `GET /api/config/despacho`.
+
+> **OJO — hoy el monto está escrito en DOS sitios.** La tienda **no** consume
+> `GET /api/config/despacho`: tiene su propia copia de la tarifa y de las cuatro
+> comunas en `tienda/src/constants/delivery.js`. Si cambias el precio solo aquí
+> —y sobre todo si lo cambias con `DESPACHO_TARIFA_CLP`, que no requiere tocar
+> código— el cliente **verá un total y Webpay le cobrará otro**. Mientras las dos
+> copias existan, cualquier cambio de tarifa o de comuna hay que hacerlo en los
+> dos archivos y volver a desplegar la tienda. Lo correcto es que la tienda lea
+> el endpoint; está pendiente.
+
+Los pedidos **anteriores** a este cambio (pagados por transferencia, retirados
+en bodega) se siguen leyendo, cobrando y cerrando con normalidad: los enums del
+modelo `Order` no se recortaron. Lo que se cerró es lo que se acepta de aquí en
+adelante.
+
+---
+
 ## Cambios respecto a v1
 
 ### Correcciones críticas

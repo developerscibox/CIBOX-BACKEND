@@ -79,11 +79,16 @@ export const LABELS = {
   [ORDER_STATUS.REFUNDED]: "Reembolsado",
 };
 
-/** Qué le decimos al CLIENTE en cada estado (seguimiento en la web). */
+/**
+ * Qué le decimos al CLIENTE en cada estado (seguimiento en la web). Es la copia
+ * para despacho a domicilio; las variantes de retiro en bodega y el "qué viene
+ * después" salen de `copyCliente`, que es lo que hay que usar. Se mantiene
+ * exportado para no romper a quien ya lo importa.
+ */
 export const CLIENT_COPY = {
   [ORDER_STATUS.PENDING]: {
     titulo: "Esperando tu pago",
-    detalle: "Cuando confirmemos el pago empezamos a preparar tu pedido.",
+    detalle: "Recibimos tu pedido y reservamos tus productos mientras se confirma el pago.",
   },
   [ORDER_STATUS.PAID]: {
     titulo: "Pago confirmado",
@@ -94,12 +99,12 @@ export const CLIENT_COPY = {
     detalle: "Estamos armando tu compra en la bodega.",
   },
   [ORDER_STATUS.READY]: {
-    titulo: "Pedido listo",
-    detalle: "Tu pedido está empacado y listo para salir.",
+    titulo: "Listo para despacho",
+    detalle: "Tu pedido está empacado y saldrá en el próximo reparto.",
   },
   [ORDER_STATUS.SHIPPED]: {
     titulo: "En camino",
-    detalle: "Tu pedido salió a reparto.",
+    detalle: "Tu pedido salió a reparto y va hacia tu dirección.",
   },
   [ORDER_STATUS.DELIVERED]: {
     titulo: "Entregado",
@@ -113,6 +118,53 @@ export const CLIENT_COPY = {
     titulo: "Pedido reembolsado",
     detalle: "Te devolvimos el dinero de este pedido.",
   },
+};
+
+/**
+ * Qué viene después de cada estado, para que el cliente no tenga que adivinar.
+ * Los terminales no tienen "después".
+ */
+const SIGUIENTE = {
+  [ORDER_STATUS.PENDING]: "Cuando confirmemos el pago empezamos a preparar tu pedido.",
+  [ORDER_STATUS.PAID]: "Nuestro equipo lo tomará en la próxima tanda de preparación.",
+  [ORDER_STATUS.PREPARING]: "Te avisaremos cuando esté listo para despacho.",
+  [ORDER_STATUS.READY]: "Te avisaremos por correo cuando vaya en camino.",
+  [ORDER_STATUS.SHIPPED]: "Cuando lo recibas, quedará marcado como entregado.",
+  [ORDER_STATUS.DELIVERED]: "Si falta algo o algo llegó en mal estado, escríbenos y lo resolvemos.",
+  [ORDER_STATUS.CANCELLED]: "",
+  [ORDER_STATUS.REFUNDED]: "",
+};
+
+/**
+ * Variantes para retiro en bodega: no hay reparto, así que "listo" no significa
+ * que va a salir sino que lo pueden pasar a buscar. Solo lo que cambia.
+ */
+const COPY_RETIRO = {
+  [ORDER_STATUS.PREPARING]: { siguiente: "Te avisaremos cuando esté listo para retirar." },
+  [ORDER_STATUS.READY]: {
+    titulo: "Listo para retirar",
+    detalle: "Tu pedido te espera en nuestra bodega.",
+    siguiente: "Cuando lo retires quedará como entregado.",
+  },
+};
+
+/**
+ * Copia para el cliente según el estado Y el tipo de entrega. Un estado que la
+ * máquina no conoce no revienta la vista: se muestra tal cual, sin detalle.
+ *
+ * @param {string} status
+ * @param {string} deliveryMethod  "delivery" | "pickup"
+ * @returns {{titulo: string, detalle: string, siguiente: string}}
+ */
+export const copyCliente = (status, deliveryMethod = "delivery") => {
+  const base = CLIENT_COPY[status] || { titulo: status || "", detalle: "" };
+  const retiro = deliveryMethod === "pickup" ? COPY_RETIRO[status] : null;
+  return {
+    titulo: base.titulo,
+    detalle: base.detalle,
+    siguiente: SIGUIENTE[status] ?? "",
+    ...retiro,
+  };
 };
 
 /**
@@ -164,10 +216,11 @@ export const lineaDeTiempo = (order = {}) => {
   const actualIdx = camino.indexOf(order.status);
   const pasos = camino.map((estado, i) => {
     const h = primeraVez(estado);
+    const copy = copyCliente(estado, order.delivery_method);
     return {
       estado,
-      titulo: CLIENT_COPY[estado].titulo,
-      detalle: CLIENT_COPY[estado].detalle,
+      titulo: copy.titulo,
+      detalle: copy.detalle,
       cumplido: Boolean(h) || (actualIdx >= 0 && i <= actualIdx),
       actual: estado === order.status,
       fecha: h?.changed_at || null,
@@ -177,10 +230,11 @@ export const lineaDeTiempo = (order = {}) => {
 
   if (TERMINAL_STATUSES.includes(order.status)) {
     const h = primeraVez(order.status);
+    const copy = copyCliente(order.status, order.delivery_method);
     pasos.push({
       estado: order.status,
-      titulo: CLIENT_COPY[order.status].titulo,
-      detalle: CLIENT_COPY[order.status].detalle,
+      titulo: copy.titulo,
+      detalle: copy.detalle,
       cumplido: true,
       actual: true,
       fecha: h?.changed_at || null,
@@ -208,6 +262,7 @@ export default {
   VALID_TRANSITIONS,
   LABELS,
   CLIENT_COPY,
+  copyCliente,
   puedeTransicionar,
   siguientesEstados,
   caminoDe,

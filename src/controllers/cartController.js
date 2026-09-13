@@ -12,7 +12,7 @@ import {
   ConflictError,
   NotFoundError,
 } from "../utils/errors.js";
-import { calculateItemPricing, getBoxQty } from "../services/pricingService.js";
+import { calculateItemPricing } from "../services/pricingService.js";
 import { ppumDeProducto } from "../catalogo/ppum.js";
 import {
   reserveStockAtomic,
@@ -38,22 +38,36 @@ const ownerAssign = (identity) => {
 const recalcCartTotal = (items) =>
   items.reduce((acc, it) => acc + Number(it.subtotal || 0), 0);
 
-const buildCartItem = ({ product, quantity, user }) => {
+const buildCartItem = ({ product, quantity, user, fromPantry = false }) => {
   if (!product) throw new NotFoundError("Producto no encontrado");
   if (!product.is_active) throw new ConflictError("Producto inactivo");
 
   const tiers = product?.pricing?.tiers || [];
-  // Cibox vende SOLO por caja: normaliza a un múltiplo entero de la caja
-  // (mínimo 1 caja), independientemente de lo que pida el cliente.
-  const boxQty = getBoxQty(tiers);
+  // Cibox es un supermercado: el cliente lleva la cantidad que pide, desde una
+  // unidad. El tramo del pack es un DESCUENTO que aplica solo cuando la
+  // cantidad lo alcanza (getPriceTierByQuantity), no un mínimo de compra.
+  //
+  // Antes se redondeaba al múltiplo del pack ("Cibox vende SOLO por caja"), un
+  // resto del catálogo mayorista: el cliente agregaba 1 y el carrito, el pedido
+  // y el correo decían 4. La tienda ya vendía por unidad (boxQtyOf() === 1);
+  // el backend era el único que seguía en el modelo viejo.
+  const boxQty = 1;
   const requestedQty = Number(quantity || 0);
-  const normalizedQty = Math.max(1, Math.round(requestedQty / boxQty)) * boxQty;
+  const normalizedQty = Math.max(1, Math.round(requestedQty));
 
   const pricing = calculateItemPricing({
     tiers,
     quantity: normalizedQty,
     product,
     user,
+    // El descuento de despensa tiene que entrar acá también. Sin esto, tocar
+    // una línea de un carrito armado desde Mi Despensa la devolvía a precio de
+    // lista SOLO en el carrito: al crear el pedido, rebuildItemsFromCart
+    // vuelve a aplicar el descuento a todas las líneas, así que el carrito
+    // mostraba un 7% de más. Como el envío gratis se decide por monto, ese 7%
+    // podía cruzar los $60.000 en la pantalla sin cruzarlos en el cobro: el
+    // cliente leía "Gratis" y Webpay le cobraba el despacho.
+    fromPantry,
   });
 
   return {
@@ -271,6 +285,7 @@ export const addItem = asyncHandler(async (req, res) => {
     product,
     quantity: newQty,
     user: req.user,
+    fromPantry: Boolean(cart.from_pantry),
   });
 
   // Reservar el delta ANTES de guardar el carrito: si no hay disponible,
@@ -325,6 +340,7 @@ export const updateItem = asyncHandler(async (req, res) => {
     product,
     quantity: Number(quantity),
     user: req.user,
+    fromPantry: Boolean(cart.from_pantry),
   });
 
   const prevUnits = Number(cart.items[idx].quantity || 0);

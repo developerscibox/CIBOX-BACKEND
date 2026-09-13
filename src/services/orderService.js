@@ -41,12 +41,14 @@ import { emitDocumentForOrder } from "./siiService.js";
 
 // Boleta (stub SII) best-effort: se emite tras CUALQUIER método de pago, no solo
 // Webpay. Idempotente (siiService deduplica por orden+tipo) y nunca rompe el pago.
+// Devuelve el documento (o null) para que el correo de pago lo pueda incluir.
 const emitBoletaBestEffort = async (order) => {
-  if (!order) return;
+  if (!order) return null;
   try {
-    await emitDocumentForOrder(order, "boleta");
+    return await emitDocumentForOrder(order, "boleta");
   } catch (err) {
     logger.warn({ orderId: String(order?._id || ""), err: err.message }, "boleta best-effort falló");
+    return null;
   }
 };
 import {
@@ -58,9 +60,31 @@ import {
   findFirstPurchaseAutoCoupon,
 } from "./couponService.js";
 import { quoteShippingForOrder } from "./shippingService.js";
+// Avisos al cliente (correo + push). Se disparan desde la función que persiste
+// cada transición, después de confirmar la escritura, y nunca lanzan.
+import { notificarCambioDeEstado } from "./notificacionesPedidoService.js";
 
-import { addressOneLine } from "../config/brand.js";
+import { zonaDeDespacho, CARRIER_DESPACHO } from "../config/despacho.js";
 /* ------------------------------ helpers ---------------------------------- */
+
+/**
+ * SOLO SE PAGA CON TARJETA (Webpay). Segunda barrera, después del Zod del
+ * validador: si mañana alguien afloja el esquema, agrega otro endpoint de
+ * creación o llama al servicio desde un script, el pedido sigue sin poder
+ * nacer con un medio de pago descontinuado.
+ *
+ * Ojo: esto NO afecta a los pedidos históricos pagados por transferencia o en
+ * efectivo al retirar. Aquellos ya están guardados y se siguen leyendo,
+ * cobrando y cerrando con normalidad; lo que se cierra es la entrada.
+ */
+export const assertPagoConTarjeta = (payment) => {
+  const method = String(payment?.method || "webpay").toLowerCase();
+  if (method !== "webpay") {
+    throw new BadRequestError("Solo se acepta pago con tarjeta (Webpay)", {
+      "payment.method": "Solo se acepta pago con tarjeta (Webpay)",
+    });
+  }
+};
 
 const normalizeEmail = (e) =>
   String(e || "")
@@ -80,80 +104,64 @@ const isValidEmailFormat = (e) =>
 
 const isValidPhoneCL = (p) => /^\+569\d{8}$/.test(normalizePhoneCL(p));
 
-// Dirección física de retiro. Fuente de verdad: config/brand.js.
-const PICKUP_LOCATION = addressOneLine();
-
 /**
- * Valida customer siempre y shipping solo cuando es retiro=delivery.
- * En pickup el shipping es opcional.
+ * Valida los datos del cliente y la dirección de despacho.
+ *
+ * La dirección es siempre obligatoria: ya no existe el retiro en bodega, así
+ * que todo pedido tiene que ir a alguna parte. Además la comuna tiene que estar
+ * dentro de la zona de reparto (config/despacho.js): el error se devuelve en el
+ * campo "city" a propósito, para que el checkout lo pinte junto al selector de
+ * comuna y la persona se entere ahí mismo, no al final del formulario.
  */
-const validateCustomerAndShipping = ({ customer, shipping, isPickup = false }) => {
+const validateCustomerAndShipping = ({ customer, shipping }) => {
   const errors = {};
   if (!String(customer?.fullName || "").trim())
     errors.fullName = "Nombre requerido";
   if (!isValidEmailFormat(customer?.email)) errors.email = "Email inválido";
   if (!isValidPhoneCL(customer?.phone)) errors.phone = "Teléfono inválido";
   if (!isValidRut(customer?.rut)) errors.rut = "RUT inválido";
-  if (isPickup) return errors; // pickup: no exige dirección de despacho
   if (!String(shipping?.region || "").trim())
     errors.region = "Región requerida";
   if (!String(shipping?.city || "").trim()) errors.city = "Comuna requerida";
   if (String(shipping?.address || "").trim().length < 5)
     errors.address = "Dirección inválida";
+
+  // Cobertura: solo si la comuna vino escrita, para no tapar el "Comuna
+  // requerida" de arriba con el mensaje de zona.
+  if (!errors.city) {
+    const zona = zonaDeDespacho({
+      region: shipping?.region,
+      comuna: shipping?.city,
+    });
+    if (!zona.ok) errors[zona.campo] = zona.mensaje;
+  }
+
   return errors;
 };
 
 /**
- * Hoy en America/Santiago como Date a las 00:00 (para comparar con la fecha
- * comprometida sin verse afectado por la zona del servidor).
- */
-const santiagoTodayYMD = () => {
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Santiago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  return fmt.format(new Date()); // "YYYY-MM-DD"
-};
-
-/**
- * Resuelve y valida el bloque delivery del request.
- * - method "pickup": committed_date REQUERIDA, hoy o futura (America/Santiago).
- * - method "delivery" o ausente: comportamiento delivery (retrocompatible).
- * Devuelve { isPickup, committedDate (Date|null) }.
+ * YA NO HAY RETIRO EN TIENDA. Se mantiene la función porque los clientes viejos
+ * (una app instalada que no se ha actualizado) siguen mandando el bloque
+ * delivery: en vez de crear un pedido de retiro que nadie va a preparar, se
+ * rechaza con un mensaje que explica el cambio.
+ *
+ * Los pedidos de retiro YA CREADOS no se tocan: se siguen preparando, cerrando
+ * y consultando igual que siempre. Esto solo cierra la puerta de entrada.
  */
 const resolveDelivery = (delivery = {}) => {
   const method = String(delivery?.method || "delivery").toLowerCase();
-  const isPickup = method === "pickup";
 
-  if (!isPickup) return { isPickup: false, committedDate: null };
-
-  const raw = String(delivery?.committed_date || "").trim();
-  if (!raw) {
-    throw new BadRequestError("Hay campos inválidos en el checkout", {
-      committed_date: "Fecha de retiro requerida",
-    });
+  if (method === "pickup") {
+    throw new BadRequestError(
+      "Ya no hay retiro en tienda: todos los pedidos se despachan a domicilio",
+      {
+        "delivery.method":
+          "Ya no hay retiro en tienda: todos los pedidos se despachan a domicilio",
+      },
+    );
   }
 
-  // Tomar solo la parte YYYY-MM-DD (acepta ISO completo).
-  const ymd = raw.slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
-    throw new BadRequestError("Hay campos inválidos en el checkout", {
-      committed_date: "Formato inválido (YYYY-MM-DD)",
-    });
-  }
-
-  if (ymd < santiagoTodayYMD()) {
-    throw new BadRequestError("Hay campos inválidos en el checkout", {
-      committed_date: "La fecha de retiro debe ser hoy o futura",
-    });
-  }
-
-  // Guardar como mediodía UTC del día comprometido para evitar que un offset
-  // de zona empuje la fecha al día anterior/siguiente al mostrarla.
-  const committedDate = new Date(`${ymd}T12:00:00.000Z`);
-  return { isPickup: true, committedDate };
+  return { isPickup: false, committedDate: null };
 };
 
 const buildCustomer = (raw = {}) => ({
@@ -163,13 +171,21 @@ const buildCustomer = (raw = {}) => ({
   rut: formatRut(raw.rut || ""),
 });
 
-const buildShipping = (raw = {}) => ({
-  region: String(raw.region || "").trim(),
-  city: String(raw.city || "").trim(),
-  address: String(raw.address || "").trim(),
-  addressLine2: String(raw.addressLine2 || "").trim() || null,
-  reference: String(raw.reference || "").trim() || null,
-});
+const buildShipping = (raw = {}) => {
+  const region = String(raw.region || "").trim();
+  const city = String(raw.city || "").trim();
+  // Si la dirección está en zona guardamos el nombre canónico ("Machalí", no
+  // "MACHALI" ni "machali"): las hojas de reparto agrupan por comuna y con el
+  // texto tal cual lo escribió el cliente quedaban tres comunas distintas.
+  const zona = zonaDeDespacho({ region, comuna: city });
+  return {
+    region: zona.ok ? zona.region : region,
+    city: zona.ok ? zona.comuna : city,
+    address: String(raw.address || "").trim(),
+    addressLine2: String(raw.addressLine2 || "").trim() || null,
+    reference: String(raw.reference || "").trim() || null,
+  };
+};
 
 const issueGuestToken = () => crypto.randomBytes(32).toString("hex");
 const hashGuestToken = (token) =>
@@ -413,14 +429,47 @@ const computeOrderTotals = ({ subtotal, shippingAmount, discountAmount }) => {
   };
 };
 
-const resolveShippingAmount = ({ items, shipping }) => {
-  const orderLike = { items, shipping };
+/**
+ * Un pedido de $0 no se puede pagar y no se puede cobrar.
+ *
+ * Mientras el despacho costó siempre 3.990, esos 3.990 tapaban el caso: el
+ * total nunca llegaba a cero por mucho que descontara el cupón, porque
+ * computeOrderTotals topea el descuento al subtotal pero después suma el flete.
+ * Con envío gratis el tope deja de estar tapado: un cupón del 100% sobre un
+ * carrito que llega al mínimo da total 0 exacto.
+ *
+ * Sin este freno la orden NACE igual, con su stock comprometido, y recién
+ * revienta al pedirle la transacción a Webpay (que rechaza montos <= 0). El
+ * cliente ve un error genérico, el pedido queda pendiente y el stock bloqueado
+ * hasta que lo cancele el trabajo de expiración. Es mejor no crearla.
+ */
+export const assertTotalCobrable = (totals) => {
+  if (Number(totals?.total) > 0) return;
+  // No se sugiere "agrega más productos": con un cupón porcentual el descuento
+  // crece junto con el carrito y el total se queda pegado en cero por mucho que
+  // el cliente agregue. Lo único que destraba el pedido es sacar el cupón.
+  throw new BadRequestError(
+    "El descuento cubre el pedido completo y no queda nada que cobrar. " +
+      "Quita el cupón para continuar.",
+    { couponCode: "El descuento deja el total en cero" },
+  );
+};
+
+const resolveShippingAmount = ({ items, subtotal, shipping }) => {
+  // El subtotal viaja explícito además de los ítems: la cotización lo usa para
+  // decidir si el pedido llega al mínimo de envío gratis, y este es el MISMO
+  // número que va a quedar guardado en la orden. Dejar que la cotización lo
+  // sume por su cuenta daría lo mismo hoy, pero bastaría con que alguien
+  // cambiara la forma de sumar en un lado para que el pedido se guardara con
+  // un despacho distinto del que se cotizó.
+  const orderLike = { items, subtotal, shipping };
   const quote = quoteShippingForOrder(orderLike);
   return {
     amount: Number(quote.selected?.amount || 0),
+    envio_gratis: !!quote.selected?.envio_gratis,
     service_name: quote.selected?.service_name || null,
     service_code: quote.selected?.service_code || null,
-    carrier: quote.selected?.carrier || "blueexpress_manual",
+    carrier: quote.selected?.carrier || CARRIER_DESPACHO,
   };
 };
 
@@ -492,28 +541,19 @@ const buildOrderPayload = ({
   notes,
   source,
   guestTokenHash,
-  deliveryMethod = "delivery",
-  pickup = null,
 }) => ({
   user_id: identity.userId || null,
   guest_id: identity.userId ? null : identity.guestId || null,
   guest_token_hash: identity.userId ? null : guestTokenHash,
   items,
   customer,
-  delivery_method: deliveryMethod,
-  ...(deliveryMethod === "pickup"
-    ? {
-        pickup: {
-          committed_date: pickup?.committed_date || null,
-          location: pickup?.location || PICKUP_LOCATION,
-          picked_up_at: null,
-        },
-      }
-    : {}),
+  // Todos los pedidos nuevos son a domicilio. El bloque `pickup` del modelo se
+  // deja de escribir (sigue existiendo para leer los pedidos de retiro viejos).
+  delivery_method: "delivery",
   shipping: {
     ...shipping,
     amount: totals.shipping_amount,
-    carrier: shipping.carrier || "blueexpress_manual",
+    carrier: shipping.carrier || CARRIER_DESPACHO,
     service_name: shipping.service_name || null,
     service_code: shipping.service_code || null,
     tracking_number: null,
@@ -521,7 +561,9 @@ const buildOrderPayload = ({
     label_url: null,
   },
   payment: {
-    method: payment?.method || "webpay",
+    // Fijo, no lo que mande el cliente: el único medio de pago es la tarjeta.
+    // assertPagoConTarjeta() ya rechazó cualquier otra cosa antes de llegar acá.
+    method: "webpay",
     platform: payment?.platform || "web",
     status: PAYMENT_STATUS.PENDING,
     transaction_id: null,
@@ -573,12 +615,13 @@ export const createOrderFromCart = async ({
   notes,
   couponCode,
 }) => {
-  const { isPickup, committedDate } = resolveDelivery(delivery);
+  resolveDelivery(delivery); // rechaza el retiro en tienda
+  assertPagoConTarjeta(payment);
 
   const customer = buildCustomer(rawCustomer);
   const shipping = buildShipping(rawShipping);
 
-  const errors = validateCustomerAndShipping({ customer, shipping, isPickup });
+  const errors = validateCustomerAndShipping({ customer, shipping });
   if (Object.keys(errors).length > 0) {
     throw new BadRequestError("Hay campos inválidos en el checkout", errors);
   }
@@ -603,15 +646,16 @@ export const createOrderFromCart = async ({
       session,
     });
 
-    // Pickup: sin cotización de envío. shipping_amount=0, carrier pickup_in_store.
-    const shippingResolved = isPickup
-      ? {
-          amount: 0,
-          service_name: null,
-          service_code: null,
-          carrier: "pickup_in_store",
-        }
-      : resolveShippingAmount({ items, shipping });
+    // El monto del despacho SIEMPRE lo pone el servidor (tarifa plana de la
+    // zona), nunca el cliente.
+    // El despacho se resuelve ANTES que el cupón, y es a propósito: el mínimo
+    // de envío gratis se mide sobre el subtotal bruto de la mercadería. Mover
+    // esta línea después de resolveCouponDiscount para medir sobre el subtotal
+    // ya descontado es justo lo que alguien va a querer "arreglar" algún día, y
+    // rompería la tienda: los cuatro endpoints de /api/shipping cotizan sin
+    // saber nada de cupones, así que el carrito mostraría un despacho y el
+    // pedido cobraría otro. La explicación larga está en config/despacho.js.
+    const shippingResolved = resolveShippingAmount({ items, subtotal, shipping });
     const shippingAmount = shippingResolved.amount;
 
     const couponResolved = await resolveCouponDiscount({
@@ -627,6 +671,7 @@ export const createOrderFromCart = async ({
       shippingAmount,
       discountAmount: couponResolved.discount,
     });
+    assertTotalCobrable(totals);
 
     const guestToken = identity.userId ? null : issueGuestToken();
     const guestTokenHash = guestToken ? hashGuestToken(guestToken) : null;
@@ -647,10 +692,6 @@ export const createOrderFromCart = async ({
       notes,
       source: "cart",
       guestTokenHash,
-      deliveryMethod: isPickup ? "pickup" : "delivery",
-      pickup: isPickup
-        ? { committed_date: committedDate, location: PICKUP_LOCATION }
-        : null,
     });
 
     const [order] = await Order.create([payload], { session });
@@ -680,6 +721,10 @@ export const createOrderFromCustomBox = async ({
   notes,
   couponCode,
 }) => {
+  // La custom box no pasa por resolveDelivery (nunca tuvo retiro), pero sí
+  // comparte el medio de pago: acá también solo se acepta tarjeta.
+  assertPagoConTarjeta(payment);
+
   const customer = buildCustomer(rawCustomer);
   const shipping = buildShipping(rawShipping);
 
@@ -699,7 +744,14 @@ export const createOrderFromCustomBox = async ({
       session,
     });
 
-    const shippingResolved = resolveShippingAmount({ items, shipping });
+    // El despacho se resuelve ANTES que el cupón, y es a propósito: el mínimo
+    // de envío gratis se mide sobre el subtotal bruto de la mercadería. Mover
+    // esta línea después de resolveCouponDiscount para medir sobre el subtotal
+    // ya descontado es justo lo que alguien va a querer "arreglar" algún día, y
+    // rompería la tienda: los cuatro endpoints de /api/shipping cotizan sin
+    // saber nada de cupones, así que el carrito mostraría un despacho y el
+    // pedido cobraría otro. La explicación larga está en config/despacho.js.
+    const shippingResolved = resolveShippingAmount({ items, subtotal, shipping });
     const shippingAmount = shippingResolved.amount;
 
     const couponResolved = await resolveCouponDiscount({
@@ -715,6 +767,7 @@ export const createOrderFromCustomBox = async ({
       shippingAmount,
       discountAmount: couponResolved.discount,
     });
+    assertTotalCobrable(totals);
 
     const guestToken = identity.userId ? null : issueGuestToken();
     const guestTokenHash = guestToken ? hashGuestToken(guestToken) : null;
@@ -830,6 +883,9 @@ export const markAsPaid = async ({
   note = null,
   cash = null,
 } = {}) => {
+  // Solo se avisa al cliente si esta llamada fue la que pasó el pedido a
+  // pagado; la rama idempotente ("ya pagada") no debe mandar el correo otra vez.
+  let transicionado = false;
   const paid = await withTransaction(async (session) => {
     const order = await Order.findById(orderId).session(session);
     if (!order) throw new NotFoundError("Orden no encontrada");
@@ -898,6 +954,7 @@ export const markAsPaid = async ({
     });
 
     await order.save({ session });
+    transicionado = true;
 
     logger.info(
       { orderId: String(order._id), method: order.payment?.method },
@@ -905,7 +962,10 @@ export const markAsPaid = async ({
     );
     return order;
   });
-  await emitBoletaBestEffort(paid);
+  const boleta = await emitBoletaBestEffort(paid);
+  if (transicionado) {
+    notificarCambioDeEstado({ order: paid, status: ORDER_STATUS.PAID, taxDocument: boleta }).catch(() => {});
+  }
   return paid;
 };
 
@@ -927,6 +987,7 @@ export const markAsPaidCash = async ({
  * orden "retirada"/delivered aparte). Idempotente si ya estaba cobrada.
  */
 export const collectCashAtPickup = async ({ orderId, amountReceived, by = null }) => {
+  let cobrado = false;
   const paid = await withTransaction(async (session) => {
     const order = await Order.findById(orderId).session(session);
     if (!order) throw new NotFoundError("Orden no encontrada");
@@ -952,13 +1013,19 @@ export const collectCashAtPickup = async ({ orderId, amountReceived, by = null }
       by: by || { label: "operaciones" },
     });
     await order.save({ session });
+    cobrado = true;
     logger.info(
       { orderId: String(order._id), received, change: received - total },
       "efectivo cobrado al retiro",
     );
     return order;
   });
-  await emitBoletaBestEffort(paid);
+  const boleta = await emitBoletaBestEffort(paid);
+  // Mismo aviso "Pago confirmado" (con la boleta) que markAsPaid y Webpay. Solo
+  // cuando esta llamada registró el cobro: la rama idempotente no avisa de nuevo.
+  if (cobrado) {
+    notificarCambioDeEstado({ order: paid, status: ORDER_STATUS.PAID, taxDocument: boleta }).catch(() => {});
+  }
   return paid;
 };
 
@@ -1100,7 +1167,7 @@ export const cancelOrder = async ({
   by = null,
   movementType = MOVEMENT_TYPES.CANCELLATION,
 }) => {
-  return withTransaction(async (session) => {
+  const cancelada = await withTransaction(async (session) => {
     const order = await Order.findById(orderId)
       .select("+guest_token_hash")
       .session(session);
@@ -1218,6 +1285,13 @@ export const cancelOrder = async ({
     );
     return order;
   });
+  // Ya persistido: avisar al cliente (el motivo va en el correo).
+  notificarCambioDeEstado({
+    order: cancelada,
+    status: ORDER_STATUS.CANCELLED,
+    note: cancelada.cancellation_reason,
+  }).catch(() => {});
+  return cancelada;
 };
 
 /**
@@ -1231,7 +1305,7 @@ export const refundOrder = async ({
   byAdmin = false,
   by = null,
 } = {}) => {
-  return withTransaction(async (session) => {
+  const reembolsada = await withTransaction(async (session) => {
     const order = await Order.findById(orderId)
       .select("+guest_token_hash")
       .session(session);
@@ -1312,6 +1386,12 @@ export const refundOrder = async ({
     );
     return order;
   });
+  notificarCambioDeEstado({
+    order: reembolsada,
+    status: ORDER_STATUS.REFUNDED,
+    note: reason,
+  }).catch(() => {});
+  return reembolsada;
 };
 
 /**
@@ -1330,7 +1410,7 @@ export const commitOrderPick = async ({
   note = null,
   trackingNumber = null,
 }) => {
-  return withTransaction(async (session) => {
+  const confirmada = await withTransaction(async (session) => {
     const order = await Order.findById(orderId).session(session);
     if (!order) throw new NotFoundError("Orden no encontrada");
 
@@ -1426,6 +1506,12 @@ export const commitOrderPick = async ({
     await order.save({ session });
     return order;
   });
+  // "Listo para despacho" / "En camino": es el aviso que más espera el cliente
+  // y antes solo salía por PATCH /status, no por el botón "Listo" del picking.
+  notificarCambioDeEstado({ order: confirmada, status: targetStatus, trackingNumber, note }).catch(
+    () => {},
+  );
+  return confirmada;
 };
 
 export const transitionOrderStatus = async ({
@@ -1467,8 +1553,10 @@ export const transitionOrderStatus = async ({
     throw new ConflictError("Cobra el pedido antes de entregarlo");
   }
 
+  // Sin nota no se inventa un motivo: antes iba el literal "transition", que
+  // ahora llegaría al cliente como "Motivo: transition" en el correo de anulación.
   if (newStatus === ORDER_STATUS.CANCELLED) {
-    return cancelOrder({ orderId, reason: note || "transition", byAdmin, by });
+    return cancelOrder({ orderId, reason: note, byAdmin, by });
   }
 
   // PENDING→PAID por admin (transfer/cash_on_pickup): camino simple sin webpay
@@ -1514,6 +1602,10 @@ export const transitionOrderStatus = async ({
     "transición de orden aplicada",
   );
   emitRelayChange({ type: "status", id: String(order._id), status: newStatus });
+
+  // Camino "plano" (el estado se guardó recién arriba). Los estados que delegan
+  // en otra función (paid, cancelled, refunded, pick) avisan desde esa función.
+  notificarCambioDeEstado({ order, status: newStatus, trackingNumber, note }).catch(() => {});
 
   // Integración externa (Fase 6): al quedar empacado, el pedido se registra en
   // el software de seguimiento. Import dinámico para no crear un ciclo

@@ -33,6 +33,7 @@ const CONTEO = {
   un: 1, u: 1, uni: 1, unid: 1, unidad: 1, unidades: 1,
   pieza: 1, piezas: 1, pza: 1, pzas: 1,
   rollo: 1, rollos: 1, bolsita: 1, bolsitas: 1, sobre: 1, sobres: 1,
+  bolsa: 1, bolsas: 1, caja: 1, cajas: 1, paquete: 1, paquetes: 1,
   huevo: 1, huevos: 1, docena: 12, docenas: 12,
 };
 

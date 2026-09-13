@@ -11,6 +11,7 @@ import {
 import { ORDER_STATUS, PAID_STATUSES, MOVEMENT_TYPES } from "../utils/constants.js";
 import { logMovement } from "./inventoryService.js";
 import { releaseAllocated } from "./stockService.js";
+import { notificarCambioDeEstado } from "./notificacionesPedidoService.js";
 import { env } from "../config/env.js";
 
 const REFUND_WINDOW_DAYS = 7;
@@ -135,7 +136,12 @@ export const approveRefund = async ({ refundId, adminId }) => {
   const Order = getOrderModel();
   const Product = getProductModel();
 
-  return withTransaction(async (session) => {
+  // Un reembolso TOTAL deja el pedido en "refunded" sin pasar por
+  // orderService.refundOrder, así que el aviso al cliente sale desde aquí:
+  // se anota adentro y se dispara DESPUÉS de que la transacción quedó confirmada.
+  let reembolsoTotal = null;
+
+  const procesado = await withTransaction(async (session) => {
     const refund = await Refund.findById(refundId).session(session);
     if (!refund) throw new NotFoundError("Refund no encontrado");
     if (refund.status !== "pending") {
@@ -260,6 +266,7 @@ export const approveRefund = async ({ refundId, adminId }) => {
       order.status = ORDER_STATUS.REFUNDED;
       if (order.payment) order.payment.status = "refunded";
       await order.save({ session });
+      reembolsoTotal = order;
     } else {
       order.partial_refunded_amount =
         Number(order.partial_refunded_amount || 0) + Number(refund.amount);
@@ -278,6 +285,11 @@ export const approveRefund = async ({ refundId, adminId }) => {
 
     return refund.toObject();
   });
+
+  if (reembolsoTotal) {
+    notificarCambioDeEstado({ order: reembolsoTotal, status: ORDER_STATUS.REFUNDED }).catch(() => {});
+  }
+  return procesado;
 };
 
 export const rejectRefund = async ({ refundId, adminId, reason }) => {

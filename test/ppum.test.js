@@ -209,8 +209,10 @@ test("el texto usa el formato $[precio] por [unidad de medida]", () => {
 });
 
 test("los PPUM bajo $10 conservan un decimal", () => {
-  const ppum = calcularPpum({ precio: 400, contenido: 1, unidad: "kg", preset: "especias" });
-  assert.equal(ppum.valor, 4);
+  // $450 el kilo de una especia → $4,5 por 10 g. Con 400 daba 4 exacto y el
+  // test pasaba sin comprobar el decimal.
+  const ppum = calcularPpum({ precio: 450, contenido: 1, unidad: "kg", preset: "especias" });
+  assert.equal(ppum.valor, 4.5);
   assert.equal(ppum.etiqueta, "10 g");
 });
 

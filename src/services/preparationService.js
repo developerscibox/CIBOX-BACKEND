@@ -7,6 +7,7 @@ import { NotFoundError, ConflictError } from "../utils/errors.js";
 
 import { transitionOrderStatus } from "./orderService.js";
 import { adjustStock } from "./inventoryService.js";
+import { notificarCambioDeEstado } from "./notificacionesPedidoService.js";
 import { emitRelayChange } from "../utils/relayBus.js";
 
 /**
@@ -63,6 +64,9 @@ export const aceptarPicking = async ({ orderId, by = null }) => {
   }
   logger.info({ orderId: String(updated._id), by: actor.label }, "preparación iniciada (claim atómico)");
   emitRelayChange({ type: "aceptar", id: String(updated._id) });
+  // paid → preparing no pasa por transitionOrderStatus (es un claim atómico),
+  // así que el aviso "Preparando tu pedido" se dispara aquí, ya persistido.
+  notificarCambioDeEstado({ order: updated, status: ORDER_STATUS.PREPARING }).catch(() => {});
   return updated;
 };
 

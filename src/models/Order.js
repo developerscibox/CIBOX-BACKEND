@@ -306,6 +306,12 @@ orderSchema.index({ delivery_method: 1, "pickup.committed_date": 1, status: 1 })
 // adminListOrders sin filtro de status ordena por created_at desc (caso por
 // defecto del listado del WMS): índice dedicado para sort + skip eficientes.
 orderSchema.index({ created_at: -1 });
+// Consulta pública del seguimiento (POST /api/tracking/lookup): quien compró sin
+// cuenta la hace con su folio y el correo con el que compró. Se busca POR CORREO
+// —el folio corto no existe como campo, se calcula desde el _id— y sin este
+// índice sería un escaneo de toda la colección: lento y, sobre un endpoint
+// abierto a cualquiera, una denegación de servicio barata.
+orderSchema.index({ "customer.email": 1, created_at: -1 });
 
 export const Order = mongoose.models.Order || mongoose.model("Order", orderSchema);
 export default Order;

@@ -27,6 +27,11 @@ const MAX_REFRESH_HASHES_PER_USER = 10;
 
 export const hashPassword = (plain) => bcrypt.hash(String(plain), BCRYPT_ROUNDS);
 
+// Hash de relleno para igualar el tiempo de respuesta cuando el correo no
+// existe (ver loginUser). Se calcula una vez al arrancar, con el mismo costo
+// que un hash real.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync("relleno-para-tiempo-constante", BCRYPT_ROUNDS);
+
 export const hashToken = (token) =>
   crypto.createHash("sha256").update(String(token)).digest("hex");
 
@@ -152,6 +157,10 @@ export const loginUser = async ({ email, password, device = null }) => {
   );
 
   if (!user) {
+    // Mismo costo que un login real: sin esto, un correo inexistente respondía
+    // en ~5 ms y uno existente en ~100 ms (el bcrypt), y con un cronómetro se
+    // podía saber qué correos tienen cuenta aunque el mensaje sea el mismo.
+    await bcrypt.compare(String(password || ""), DUMMY_PASSWORD_HASH);
     throw new UnauthorizedError("Credenciales inválidas");
   }
 

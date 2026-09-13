@@ -6,3 +6,8 @@ uploads/
 dist/
 coverage/
 .DS_Store
+
+# Herramienta local: emite un token de sesión para cualquier usuario usando el
+# JWT_SECRET del .env. No se versiona: en un repo público es una receta.
+emitir-sesion.mjs
+sesion.json

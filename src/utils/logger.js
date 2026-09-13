@@ -17,6 +17,7 @@ export const logger = pino({
       "email_verification_token",
       "reset_password_token",
       "EMAIL_PASS",
+      "RESEND_API_KEY",
       "JWT_SECRET",
       "JWT_REFRESH_SECRET",
       "GUEST_ID_SECRET",

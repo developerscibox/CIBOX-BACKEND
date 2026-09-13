@@ -24,7 +24,17 @@ export const buildTiers = ({ price, packSize, packPrice, saleUnit }) => {
   const size = Math.max(0, Math.round(Number(packSize) || 0));
   if (size > 1) {
     const total = Math.max(0, Math.round(Number(packPrice) || 0)) || unit * size;
-    tiers.push({ min_qty: size, price: Math.round(total / size), label: `pack de ${size}` });
+    // El mismo tramo sirve para dos cosas distintas y el rótulo tiene que
+    // distinguirlas: un pack CERRADO que se vende junto (`sale_unit` pack o
+    // caja) y un DESCUENTO POR VOLUMEN sobre el producto suelto. Llamarle
+    // "pack de 4" al segundo le promete al cliente un envase de 4 unidades que
+    // no existe; lo que gana al llevar 4 es un precio, no un formato.
+    const esPackCerrado = saleUnit === "pack" || saleUnit === "caja";
+    tiers.push({
+      min_qty: size,
+      price: Math.round(total / size),
+      label: esPackCerrado ? `pack de ${size}` : `${size} o más`,
+    });
   }
   return tiers;
 };

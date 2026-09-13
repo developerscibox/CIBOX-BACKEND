@@ -7,7 +7,7 @@ export const MISSIONS = [
     discount_type: "percent",
     discount_value: 5,
     icon: "🛒",
-    color: "#4E9B27",
+    color: "#004568",
     order: 1,
   },
   {

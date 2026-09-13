@@ -15,6 +15,8 @@
  * dominio) admite override por variable de entorno. Nada de esto es secreto.
  */
 
+import { COMUNAS_CON_REPARTO } from "./despacho.js";
+
 const env = (key, fallback) => {
   const v = process.env[key];
   return v == null || v === "" ? fallback : v;
@@ -24,12 +26,15 @@ export const brand = {
   // ── Identidad ──────────────────────────────────────────────────────────────
   name: env("BRAND_NAME", "Cibox"),
   tagline: env("BRAND_TAGLINE", "Tu supermercado online"),
-  // No promete despacho a domicilio: el sistema solo hace retiro en bodega y
-  // los Términos lo dicen explícitamente. Cuando el despacho exista de verdad,
-  // se cambia acá (o por BRAND_DESCRIPTION) y baja a toda la tienda.
+  // Ya no hay retiro en bodega: todo se despacha a domicilio y solo dentro de
+  // la zona de Rancagua. Las comunas salen de config/despacho.js (fuente de
+  // verdad de la cobertura) para no tener la lista escrita dos veces: si se
+  // agrega una comuna allá, esta frase se actualiza sola.
   description: env(
     "BRAND_DESCRIPTION",
-    "Supermercado 100% online: compra desde la web y te preparamos el pedido para que lo retires.",
+    `Supermercado 100% online: compra desde la web y te despachamos a domicilio en ${COMUNAS_CON_REPARTO.join(
+      ", ",
+    )}.`,
   ),
 
   // ── Datos legales (Chile) ──────────────────────────────────────────────────
@@ -60,10 +65,12 @@ export const brand = {
   },
 
   // ── Dirección de la bodega desde donde se prepara y despacha ──────────────
-  // TODAVÍA SIN DEFINIR. Va vacía a propósito: la tienda oculta el mapa, la
-  // dirección de retiro y el bloque de ubicación mientras no haya una real, en
-  // vez de mostrar una equivocada. Cuando se defina, se setea por variable de
-  // entorno (BRAND_ADDRESS_LINE1, BRAND_COMUNA, …) sin tocar código.
+  // TODAVÍA SIN DEFINIR. Va vacía a propósito: la tienda oculta el mapa y el
+  // bloque de ubicación mientras no haya una real, en vez de mostrar una
+  // equivocada. Cuando se defina, se setea por variable de entorno
+  // (BRAND_ADDRESS_LINE1, BRAND_COMUNA, …) sin tocar código.
+  // Ya no es una dirección de retiro (el retiro se descontinuó), pero sigue
+  // haciendo falta como REMITENTE en etiquetas y documentos.
   address: {
     line1: env("BRAND_ADDRESS_LINE1", ""),
     line2: env("BRAND_ADDRESS_LINE2", ""),
@@ -91,21 +98,24 @@ export const brand = {
     panel: "/logo-cibox.png",
     tienda: "logo-cibox.png",
   },
+  // Identidad según el Manual de Diseño Digital cibox.cl v1.0: azules de base
+  // —confianza— con el verde lima como acento de acción. El lima nunca se usa
+  // como fondo extenso ni lleva texto blanco encima (rinde 1,9:1).
   colors: {
-    primary: "#4E9B27",       // verde Cibox — botones y CTA
-    primaryLight: "#C3E062",  // lima — fondos destacados
-    primaryDark: "#3E7D1E",   // verde profundo — énfasis, precios
-    accent: "#F7B81C",        // amarillo — badges de descuento
+    primary: "#004568",       // azul Cibox — navegación, titulares
+    primaryLight: "#E8F29A",  // lima rebajado — fondos suaves
+    primaryDark: "#003D49",   // azul navy — pies y fondos profundos
+    accent: "#B6D900",        // verde lima — acciones, precios, badges
     primaryText: "#ffffff",
-    background: "#f7f8f5",
+    background: "#F5F6F7",
     surface: "#ffffff",
-    text: "#111811",
-    muted: "#5f6b5f",
-    border: "#e3e8e0",
+    text: "#17202A",
+    muted: "#5A6672",
+    border: "#E2E6EA",
     ok: "#16794a",
     warn: "#d97706",
     danger: "#b00020",
-    gradient: "linear-gradient(120deg,#3E7D1E 0%,#4E9B27 50%,#C3E062 100%)",
+    gradient: "linear-gradient(120deg,#003D49 0%,#004568 50%,#006996 100%)",
   },
 };
 

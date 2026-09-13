@@ -18,6 +18,8 @@ export default [
         setInterval: "readonly",
         clearInterval: "readonly",
         AbortController: "readonly",
+        // Lo usa emailService para ponerle tope de tiempo a la llamada a Resend.
+        AbortSignal: "readonly",
         URL: "readonly",
       },
     },

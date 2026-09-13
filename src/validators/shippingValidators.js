@@ -16,6 +16,24 @@ export const previewShippingSchema = {
   }),
 };
 
+// /preview-items entraba sin pasar por Zod: el body llegaba tal cual al
+// controller. Ahora se exige lo mismo que en /preview (dirección completa) más
+// la lista de productos a cotizar.
+export const previewShippingFromItemsSchema = {
+  body: z.object({
+    shipping: shippingAddressSchema,
+    items: z
+      .array(
+        z.object({
+          product_id: objectId,
+          quantity: z.coerce.number().int().min(1).max(999),
+        }),
+      )
+      .min(1)
+      .max(50),
+  }),
+};
+
 export const quoteShippingByOrderSchema = {
   body: z.object({
     orderId: objectId,

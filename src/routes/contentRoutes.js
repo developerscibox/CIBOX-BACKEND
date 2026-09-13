@@ -10,6 +10,7 @@ import {
   putHomeContentSchema,
   getModulesConfig,
   getBrandConfig,
+  getDespachoConfig,
   getStoreStatus,
   putStoreStatus,
   putStoreStatusSchema,
@@ -45,5 +46,8 @@ router.put(
 export const configRouter = Router();
 configRouter.get("/modules", boardLimiter, getModulesConfig);
 configRouter.get("/brand", boardLimiter, getBrandConfig);
+// Comunas con reparto y tarifa plana: la tienda arma con esto el selector de
+// comuna y el resumen del checkout.
+configRouter.get("/despacho", boardLimiter, getDespachoConfig);
 
 export default router;

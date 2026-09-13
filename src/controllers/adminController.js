@@ -38,26 +38,6 @@ const buildDateMatch = (from, to) => {
   return range;
 };
 
-const tryImport = async (path) => {
-  try {
-    return (await import(path)).default;
-  } catch {
-    return null;
-  }
-};
-
-const safeCreateNotification = async (payload) => {
-  if (!payload?.userId) return;
-  const notif = await tryImport("../utils/notification.js");
-  if (notif?.createNotification) {
-    try {
-      await notif.createNotification(payload);
-    } catch (err) {
-      logger.warn({ err: err.message }, "createNotification failed");
-    }
-  }
-};
-
 // Sales summary (paid only) ---------------------------------------------
 
 export const getSalesSummary = asyncHandler(async (req, res) => {
@@ -232,16 +212,10 @@ export const updateOrderStatus = asyncHandler(async (req, res) => {
     note: reason,
   });
 
-  // Skip si guest (user_id null)
-  if (order.user_id) {
-    await safeCreateNotification({
-      userId: order.user_id,
-      type: "order_status_changed",
-      title: "Actualización de pedido",
-      message: `Tu pedido ${order._id} cambió a estado: ${newStatus}.`,
-      data: { order_id: order._id, status: newStatus },
-    });
-  }
+  // El aviso al cliente (correo + push + notificación in-app) lo dispara el
+  // servicio que persiste la transición (notificacionesPedidoService). Antes
+  // esta ruta creaba además una notificación genérica "Actualización de
+  // pedido" y el cliente con cuenta recibía dos por el mismo cambio.
 
   logger.info(
     { order_id: String(order._id), to: newStatus, by: req.user.id },

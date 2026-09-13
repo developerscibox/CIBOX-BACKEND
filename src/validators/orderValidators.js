@@ -17,45 +17,50 @@ const shippingSchema = z.object({
   reference: z.string().max(200).optional().nullable(),
 });
 
-// En pickup el shipping es opcional (y sus campos también). La validación de
-// negocio (delivery exige shipping; pickup exige committed_date) vive en
-// orderService para mantener un único punto de verdad.
-const shippingPickupSchema = z.object({
-  region: z.string().max(80).optional().nullable(),
-  city: z.string().max(80).optional().nullable(),
-  address: z.string().max(200).optional().nullable(),
-  addressLine2: z.string().max(120).optional().nullable(),
-  reference: z.string().max(200).optional().nullable(),
-});
-
+// SOLO TARJETA. La transferencia y el efectivo al retirar se descontinuaron:
+// se rechazan aquí, en la puerta de la API, para que no baste con esconder el
+// botón en la pantalla — una petición hecha a mano tampoco pasa. Los pedidos
+// viejos pagados así siguen existiendo y se leen sin problema: el enum del
+// modelo Order NO se tocó, esto solo restringe lo que se ACEPTA de aquí en
+// adelante.
 const paymentSchema = z
   .object({
-    method: z.enum(["webpay", "transfer", "cash_on_pickup"]).optional(),
+    method: z
+      .enum(["webpay"], {
+        errorMap: () => ({
+          message: "Solo se acepta pago con tarjeta (Webpay)",
+        }),
+      })
+      .optional(),
     platform: z.enum(["ios", "android", "web", "native"]).optional(),
   })
   .optional();
 
-// Fecha comprometida de retiro: YYYY-MM-DD o ISO 8601.
-const committedDateSchema = z
-  .string()
-  .regex(
-    /^\d{4}-\d{2}-\d{2}($|T)/,
-    "committed_date debe ser YYYY-MM-DD o ISO 8601",
-  );
-
+// YA NO HAY RETIRO EN BODEGA: todo pedido se despacha. Se deja el bloque
+// `delivery` para no romper a los clientes que lo mandan, pero el único valor
+// aceptable es "delivery". committed_date era la fecha de retiro: se acepta y
+// se ignora (ya no significa nada) en vez de reventar la petición.
 const deliverySchema = z
   .object({
-    method: z.enum(["delivery", "pickup"]).optional(),
-    committed_date: committedDateSchema.optional().nullable(),
+    method: z
+      .enum(["delivery"], {
+        errorMap: () => ({
+          message:
+            "Ya no hay retiro en tienda: todos los pedidos se despachan a domicilio",
+        }),
+      })
+      .optional(),
+    committed_date: z.string().max(40).optional().nullable(),
   })
   .optional();
 
 export const createFromCartSchema = {
   body: z.object({
     customer: customerSchema,
-    // shipping opcional a nivel zod: si delivery=delivery se exige en el
-    // servicio. shippingPickupSchema relaja los mínimos para pickup.
-    shipping: shippingPickupSchema.optional(),
+    // La dirección pasó a ser OBLIGATORIA: antes era opcional porque en retiro
+    // no había a dónde despachar. Sin esto se podía crear por API un pedido de
+    // despacho sin dirección.
+    shipping: shippingSchema,
     delivery: deliverySchema,
     payment: paymentSchema,
     notes: z.string().max(500).optional().nullable(),

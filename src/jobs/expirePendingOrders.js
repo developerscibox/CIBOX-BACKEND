@@ -62,16 +62,19 @@ export const expirePendingOrdersOnce = async () => {
     .limit(200)
     .lean();
 
+  // El motivo queda en cancellation_reason y se lo lee el cliente en el correo
+  // de anulación ("Tu pedido fue anulado. Motivo: …"): se redacta de cara a él,
+  // no como línea de log.
   const jobs = [
     ...stale.map((doc) => ({
       doc,
       method: "webpay",
-      reason: `Expirada: sin pago tras ${env.ORDER_PENDING_TTL_MINUTES} min`,
+      reason: `No recibimos el pago dentro del plazo de ${env.ORDER_PENDING_TTL_MINUTES} minutos`,
     })),
     ...staleOffline.map((doc) => ({
       doc,
       method: doc.payment?.method || "offline",
-      reason: `Expirada: sin pago tras ${OFFLINE_PENDING_TTL_DAYS} días`,
+      reason: `No recibimos el pago dentro del plazo de ${OFFLINE_PENDING_TTL_DAYS} días`,
     })),
   ];
 
