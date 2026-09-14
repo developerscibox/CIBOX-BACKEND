@@ -94,7 +94,14 @@ export const calculateItemPricing = ({
   user,
   fromPantry = false,
 }) => {
-  const selectedTier = getPriceTierByQuantity(tiers, quantity);
+  // Productos sin tiers (catálogo legado o recién creados sin buildTiers):
+  // usar product.price como precio unitario en vez de tirar error.
+  const effectiveTiers =
+    Array.isArray(tiers) && tiers.length > 0
+      ? tiers
+      : [{ min_qty: 1, price: Number(product?.price || 0), label: "Unidad" }];
+
+  const selectedTier = getPriceTierByQuantity(effectiveTiers, quantity);
   const qty = Number(quantity);
 
   const discountResult = applyBestDiscount({
