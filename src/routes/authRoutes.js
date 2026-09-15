@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { validate } from "../middlewares/validate.js";
 import { protect } from "../middlewares/authMiddleware.js";
-import { authLimiter, emailLimiter } from "../middlewares/rateLimiters.js";
+import { authLimiter, emailLimiter, resetPasswordLimiter } from "../middlewares/rateLimiters.js";
 import {
   registerSchema,
   loginSchema,
@@ -52,7 +52,7 @@ router.post(
 );
 router.post(
   "/reset-password",
-  authLimiter,
+  resetPasswordLimiter,
   validate({ body: resetPasswordSchema }),
   resetPassword
 );

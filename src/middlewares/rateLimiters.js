@@ -74,6 +74,18 @@ export const couponLimiter = rateLimit({
 // skipSuccessfulRequests es lo que hace que la medida no moleste al que sí es
 // dueño del pedido: quien acierta y después refresca su seguimiento no gasta
 // intentos. Solo cuentan los FALLOS, que es exactamente lo que hace el que prueba.
+// Reset de contraseña: cupo propio para no consumir el del login. El token
+// viene en el body y solo funciona si el usuario accedió al correo, así que
+// el riesgo de fuerza bruta es bajo. Se permite más intentos que en login.
+export const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { success: false, code: "TOO_MANY_REQUESTS", message: "Demasiados intentos de restablecimiento, espera 15 minutos" },
+});
+
 export const trackingLookupLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 8,
