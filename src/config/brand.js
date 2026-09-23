@@ -57,9 +57,9 @@ export const brand = {
   contact: {
     email: env("BRAND_EMAIL", "contacto@cibox.cl"),
     email_soporte: env("BRAND_EMAIL_SOPORTE", "soporte@cibox.cl"),
-    phone: env("BRAND_PHONE", "+56 9 3244 5772"),
+    phone: env("BRAND_PHONE", "+56 9 9126 4828"),
     // Solo dígitos con código de país, para los enlaces wa.me.
-    whatsapp: env("BRAND_WHATSAPP", "56932445772"),
+    whatsapp: env("BRAND_WHATSAPP", "56991264828"),
     instagram: env("BRAND_INSTAGRAM", "cibox.cl"),
     tiktok: env("BRAND_TIKTOK", "cibox.cl"),
   },
