@@ -171,7 +171,7 @@ export const normalizarDestinatarios = (to) =>
     .map((d) => String(d).trim())
     .filter(Boolean);
 
-const enviarPorResend = async ({ to, subject, text, html }) => {
+const enviarPorResend = async ({ to, subject, text, html, replyTo = null }) => {
   const cliente = await obtenerResend();
   if (!cliente) return { sent: false, reason: "resend_no_instalado" };
 
@@ -186,6 +186,9 @@ const enviarPorResend = async ({ to, subject, text, html }) => {
   const payload = { from, to: destinatarios, subject };
   if (html) payload.html = html;
   if (text) payload.text = text;
+  // Para el formulario de contacto: el equipo aprieta "Responder" y el correo
+  // le llega a quien escribió, no a la casilla de Cibox.
+  if (replyTo) payload.reply_to = replyTo;
 
   for (let intento = 1; intento <= 2; intento += 1) {
     let data;
@@ -262,9 +265,9 @@ const enviarPorResend = async ({ to, subject, text, html }) => {
   return { sent: false, reason: "rate_limited" };
 };
 
-const enviarPorSmtp = async ({ to, subject, text, html }) => {
+const enviarPorSmtp = async ({ to, subject, text, html, replyTo = null }) => {
   try {
-    const info = await smtpTransporter.sendMail({ from: env.EMAIL_FROM, to, subject, text, html });
+    const info = await smtpTransporter.sendMail({ from: env.EMAIL_FROM, to, subject, text, html, ...(replyTo ? { replyTo } : {}) });
     logger.info({ to, subject, messageId: info.messageId }, "email enviado por SMTP");
     return { sent: true, messageId: info.messageId };
   } catch (error) {
@@ -286,14 +289,14 @@ const enviarPorSmtp = async ({ to, subject, text, html }) => {
  * pedidos, pagos) dependen de que un fallo de correo no rompa el registro ni el
  * checkout, así que los problemas se registran y se devuelven en `reason`.
  */
-export const sendEmail = async ({ to, subject, text, html }) => {
+export const sendEmail = async ({ to, subject, text, html, replyTo = null }) => {
   if (!to) {
     logger.warn("sendEmail llamado sin destinatario");
     return { sent: false, reason: "no_recipient" };
   }
 
-  if (via === "resend") return enviarPorResend({ to, subject, text, html });
-  if (via === "smtp") return enviarPorSmtp({ to, subject, text, html });
+  if (via === "resend") return enviarPorResend({ to, subject, text, html, replyTo });
+  if (via === "smtp") return enviarPorSmtp({ to, subject, text, html, replyTo });
 
   logger.warn({ to, subject }, "sendEmail: transporte no configurado, email omitido");
   return { sent: false, reason: "no_transport" };

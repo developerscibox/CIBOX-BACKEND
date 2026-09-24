@@ -886,3 +886,100 @@ export const buildOrderStatusTemplate = ({ order, status, trackingNumber = null,
     `),
   };
 };
+
+/* ─────────────────────── Formulario "Contáctanos" ─────────────────────────
+ * Dos correos por mensaje: uno al equipo con el contenido, y un acuse a quien
+ * escribió. El acuse importa tanto como el aviso: sin él la persona no sabe si
+ * su mensaje salió, y vuelve a mandarlo o llama por teléfono.
+ * Todo lo que escribe el visitante pasa por escapeHtml: es texto de un
+ * desconocido entrando a la bandeja del equipo.
+ */
+
+export const buildContactMessageTemplate = ({ mensaje }) => {
+  const folio = String(mensaje?._id || "").slice(-6).toUpperCase();
+  const asunto = String(mensaje?.asunto || "").trim();
+  const cuerpo = String(mensaje?.mensaje || "");
+  const nombre = String(mensaje?.nombre || "");
+  const correo = String(mensaje?.email || "");
+  const fono = String(mensaje?.telefono || "");
+
+  return {
+    subject: `Mensaje de contacto #${folio}${asunto ? " — " + asunto : ""}`,
+    // replyTo se setea en el controlador: así el equipo responde con
+    // "Responder" y el correo llega a la persona, no a la casilla de Cibox.
+    text: [
+      `Mensaje nuevo desde el formulario de la web.`,
+      ``,
+      `Folio: #${folio}`,
+      `De: ${nombre} <${correo}>`,
+      fono ? `Teléfono: ${fono}` : null,
+      asunto ? `Asunto: ${asunto}` : null,
+      ``,
+      cuerpo,
+      ``,
+      `Responde este correo y le llega directo a ${correo}.`,
+    ].filter((l) => l !== null).join("\n"),
+    html: baseLayout(`
+      <h2 style="margin:0 0 4px;font-size:20px;color:${C.azul};">Mensaje de contacto</h2>
+      <p style="margin:0 0 18px;font-size:13px;color:${C.gris};">Folio <strong style="color:${C.texto};">#${escapeHtml(folio)}</strong></p>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+        <tr>
+          ${dato("Nombre", escapeHtml(nombre) || "—")}
+          ${dato("Correo", `<a href="mailto:${escapeAttr(correo)}" style="color:${C.azul};">${escapeHtml(correo)}</a>`)}
+        </tr>
+        <tr>
+          ${dato("Teléfono", fono ? escapeHtml(fono) : "No indicado")}
+          ${dato("Asunto", asunto ? escapeHtml(asunto) : "Sin asunto")}
+        </tr>
+      </table>
+
+      ${titulo("Mensaje")}
+      <div style="background:${C.fondo};border:1px solid ${C.borde};border-radius:10px;padding:16px;font-size:14px;line-height:1.6;color:${C.texto};white-space:pre-wrap;">${escapeHtml(cuerpo)}</div>
+
+      <p style="margin:22px 0 0;font-size:13px;color:${C.gris};">Responde este correo y le llega directo a ${escapeHtml(correo)}.</p>
+    `),
+  };
+};
+
+export const buildContactAckTemplate = ({ mensaje }) => {
+  const folio = String(mensaje?._id || "").slice(-6).toUpperCase();
+  const nombre = String(mensaje?.nombre || "").trim();
+  const cuerpo = String(mensaje?.mensaje || "");
+
+  return {
+    subject: `Recibimos tu mensaje #${folio}`,
+    text: [
+      `Hola${nombre ? " " + nombre : ""},`,
+      ``,
+      `Recibimos tu mensaje y te vamos a responder a este mismo correo.`,
+      `Tu número de referencia es #${folio}.`,
+      ``,
+      `Esto fue lo que nos escribiste:`,
+      cuerpo,
+      ``,
+      `Si necesitas agregar algo, responde este correo.`,
+    ].join("\n"),
+    html: baseLayout(`
+      <div style="text-align:center;padding:6px 0 16px;">
+        <div style="display:inline-block;width:52px;height:52px;line-height:52px;border-radius:26px;background:${C.lima};color:${C.texto};font-size:26px;font-weight:900;">&#10003;</div>
+        <h1 style="margin:14px 0 6px;font-size:22px;color:${C.azul};">Recibimos tu mensaje</h1>
+        <p style="margin:0;font-size:15px;color:${C.gris};">Hola${nombre ? " " + escapeHtml(nombre) : ""}, te responderemos a este mismo correo.</p>
+      </div>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:${C.fondo};border-radius:12px;">
+        <tr>
+          <td style="padding:16px 20px;text-align:center;">
+            <div style="font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:${C.gris};">Número de referencia</div>
+            <div style="font-size:26px;font-weight:900;letter-spacing:2px;color:${C.azul};margin-top:4px;">#${escapeHtml(folio)}</div>
+          </td>
+        </tr>
+      </table>
+
+      ${titulo("Lo que nos escribiste")}
+      <div style="background:#ffffff;border:1px solid ${C.borde};border-radius:10px;padding:14px;font-size:14px;line-height:1.6;color:${C.gris};white-space:pre-wrap;">${escapeHtml(cuerpo)}</div>
+
+      <p style="margin:22px 0 0;font-size:14px;color:${C.gris};">Si necesitas agregar algo, responde este correo.</p>
+    `),
+  };
+};

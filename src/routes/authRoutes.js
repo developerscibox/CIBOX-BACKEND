@@ -1,7 +1,12 @@
 import { Router } from "express";
 import { validate } from "../middlewares/validate.js";
 import { protect } from "../middlewares/authMiddleware.js";
-import { authLimiter, emailLimiter, resetPasswordLimiter } from "../middlewares/rateLimiters.js";
+import {
+  authLimiter,
+  emailLimiter,
+  resetPasswordLimiter,
+  refreshLimiter,
+} from "../middlewares/rateLimiters.js";
 import {
   registerSchema,
   loginSchema,
@@ -33,8 +38,10 @@ router.post("/register", authLimiter, validate({ body: registerSchema }), regist
 router.post("/login", authLimiter, validate({ body: loginSchema }), login);
 
 router.post("/logout", protect, validate({ body: refreshTokenSchema }), logout);
-// authLimiter (salta los exitosos): acota reintentos de refresh con token robado/inválido.
-router.post("/refresh", authLimiter, validate({ body: refreshTokenSchema }), refresh);
+// refreshLimiter, NO authLimiter: esta ruta la llama el navegador solo, y sus
+// fallos no pueden gastar el cupo que una persona necesita para entrar o para
+// recuperar su contraseña (ver el comentario largo en rateLimiters.js).
+router.post("/refresh", refreshLimiter, validate({ body: refreshTokenSchema }), refresh);
 
 router.get("/verify-email", validate({ query: verifyEmailSchema }), verifyEmail);
 router.post(

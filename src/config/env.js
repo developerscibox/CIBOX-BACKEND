@@ -61,6 +61,10 @@ const envSchema = z.object({
   // HTTPS/443 a través de Resend, y estas variables son las que lo habilitan.
   // Ojo: este esquema Zod es "strip", así que toda variable que no esté
   // declarada AQUÍ se descarta aunque exista en el .env del servidor.
+  // Casilla del equipo que recibe el formulario "Contáctanos". Se deja por
+  // variable para poder apuntarla a contacto@ en cuanto exista esa casilla en
+  // el proveedor de correo, sin tocar código ni desplegar la tienda.
+  CONTACT_INBOX: z.string().default(""),
   RESEND_API_KEY: z.string().default(""),
   // Remitente aparte del EMAIL_FROM porque mientras Resend esté en sandbox
   // obliga a usar onboarding@resend.dev. Cuando cibox.cl quede verificado en

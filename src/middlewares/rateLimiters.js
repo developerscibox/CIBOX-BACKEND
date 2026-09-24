@@ -74,18 +74,6 @@ export const couponLimiter = rateLimit({
 // skipSuccessfulRequests es lo que hace que la medida no moleste al que sí es
 // dueño del pedido: quien acierta y después refresca su seguimiento no gasta
 // intentos. Solo cuentan los FALLOS, que es exactamente lo que hace el que prueba.
-// Reset de contraseña: cupo propio para no consumir el del login. El token
-// viene en el body y solo funciona si el usuario accedió al correo, así que
-// el riesgo de fuerza bruta es bajo. Se permite más intentos que en login.
-export const resetPasswordLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skipSuccessfulRequests: true,
-  message: { success: false, code: "TOO_MANY_REQUESTS", message: "Demasiados intentos de restablecimiento, espera 15 minutos" },
-});
-
 export const trackingLookupLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 8,
@@ -98,6 +86,55 @@ export const trackingLookupLimiter = rateLimit({
     message:
       "Demasiados intentos de consulta. Espera 15 minutos y vuelve a intentarlo.",
   },
+});
+
+// Reset de contraseña: cupo propio para no consumir el del login. El token
+// viene en el body y solo funciona si el usuario accedió al correo, así que
+// el riesgo de fuerza bruta es bajo. Se permite más intentos que en login.
+export const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { success: false, code: "TOO_MANY_REQUESTS", message: "Demasiados intentos de restablecimiento, espera 15 minutos" },
+});
+
+// Renovación de sesión: cupo PROPIO, y este es el que más importa separar.
+//
+// QUÉ PASÓ SIN ESTO (16-sep-2026): /auth/refresh compartía cupo con /login y
+// /reset-password. La renovación NO la pide una persona: la dispara el
+// navegador solo cuando la sesión vence, y falla con 401 — que es un fallo y
+// por lo tanto contaba. Bastaban diez vencimientos en quince minutos (varias
+// pestañas, varias recargas, o varias personas tras la misma IP de oficina)
+// para agotar el cupo. A partir de ahí la persona no podía entrar NI cambiar
+// su contraseña: el enlace del correo le respondía "demasiados intentos".
+// Le pasó a alguien del equipo y costó una tarde entender por qué.
+//
+// Por qué el tope es alto: aquí no hay secreto que adivinar. El refresh token
+// es un valor aleatorio largo que viaja en cookie httpOnly; no se llega a él
+// probando. Lo único que acota este límite es el abuso, no la fuerza bruta.
+// Con skipSuccessfulRequests solo cuentan los fallos, así que una oficina
+// entera renovando sesiones legítimas nunca lo toca.
+export const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { success: false, code: "TOO_MANY_REQUESTS", message: "Demasiados intentos de renovación de sesión. Vuelve a iniciar sesión." },
+});
+
+// Formulario público "Contáctanos": acota la inundación de la bandeja del
+// equipo. Cupo propio y no el de correos (emailLimiter): si lo compartiera,
+// escribir por el formulario dejaría a esa persona sin poder pedir el correo
+// de recuperación de contraseña el resto de la hora.
+export const contactLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, code: "TOO_MANY_REQUESTS", message: "Recibimos varios mensajes tuyos. Espera un rato antes de enviar otro." },
 });
 
 // Búsquedas sensibles con sesión de baja confianza (p.ej. buscar cliente por RUT):

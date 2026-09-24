@@ -41,6 +41,7 @@ import cobranzaRoutes from "./routes/cobranzaRoutes.js";
 import clientesRoutes from "./routes/clientesRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import contentRoutes, { configRouter } from "./routes/contentRoutes.js";
+import contactRoutes from "./routes/contactRoutes.js";
 import priceApprovalRoutes from "./routes/priceApprovalRoutes.js";
 import integracionesRoutes from "./routes/integracionesRoutes.js";
 
@@ -138,6 +139,7 @@ app.use("/api/clientes", clientesRoutes);
 app.use("/api/price-approvals", priceApprovalRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/content", contentRoutes);
+app.use("/api/contact", contactRoutes);
 app.use("/api/config", configRouter);
 // Puerto de integración con software externo (seguimiento de pedidos).
 app.use("/api/integraciones", integracionesRoutes);
