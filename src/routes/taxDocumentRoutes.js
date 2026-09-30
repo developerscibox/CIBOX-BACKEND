@@ -8,6 +8,7 @@ import {
   voidDocumentSchema,
   taxDocumentIdParamsSchema,
   listMyDocumentsSchema,
+  markEmittedSchema,
 } from "../validators/taxDocumentValidators.js";
 import {
   emitForOrder,
@@ -15,6 +16,7 @@ import {
   listAllDocuments,
   getDocumentById,
   voidDocument,
+  markDocumentEmitted,
 } from "../controllers/taxDocumentController.js";
 
 const router = Router();
@@ -37,6 +39,16 @@ router.get(
   protect,
   validate({ params: taxDocumentIdParamsSchema }),
   getDocumentById
+);
+
+// Anotar a mano el folio de una boleta que ya se emitió en el portal del SII.
+// Va después de GET "/:id" sin problema: distinto método y dos segmentos más.
+router.post(
+  "/admin/:id/emitida",
+  protect,
+  requireAdmin,
+  validate({ params: taxDocumentIdParamsSchema, body: markEmittedSchema }),
+  markDocumentEmitted
 );
 
 router.post(

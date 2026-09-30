@@ -17,14 +17,12 @@ import { createShipmentForPaidOrder } from "../services/shippingService.js";
 import { ORDER_STATUS, PAYMENT_STATUS } from "../utils/constants.js";
 import {
   buildPaymentApprovedTemplate,
-  textoDespacho,
+  buildInternalSaleTemplate,
 } from "../utils/emailTemplates.js";
 import mongoose from "mongoose";
 
 const sanitizeOrder = (order) =>
   order && typeof order.toJSON === "function" ? order.toJSON() : order;
-
-const money = (value) => `$${Number(value || 0).toLocaleString("es-CL")}`;
 
 const getReturnBase = (order) => {
   const platform = order?.payment?.platform;
@@ -135,91 +133,22 @@ const getVendorEmailsFromOrder = async (order) => {
   return [...new Set(emails.filter(Boolean))];
 };
 
-const sendInternalOrderNotificationEmail = async (order) => {
-  const adminEmail = ["developers@cibox.cl", "emuirhead@cibox.cl", "g.fariaslisboa@gmail.com"];
+const sendInternalOrderNotificationEmail = async (order, taxDocument = null) => {
+  const adminEmail = "developers@cibox.cl";
 
   try {
     const vendorEmails = await getVendorEmailsFromOrder(order);
-    const recipients = [...new Set([...adminEmail, ...vendorEmails])];
+    const recipients = [...new Set([adminEmail, ...vendorEmails])];
 
     if (!recipients.length) return;
 
-    const orderId = String(order._id || order.id || "");
-    const shortOrder = orderId.slice(-8);
-    const isCustomBox = order.source === "custom_box";
-
-    const sourceText = isCustomBox
-      ? "Tipo: Caja personalizada\n"
-      : "";
-
-    const sourceHtml = isCustomBox
-      ? `<p style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px 14px;color:#166534;font-weight:700;margin-bottom:16px;">📦 Caja personalizada — los productos fueron elegidos por el cliente</p>`
-      : "";
-
-    const itemsText = (order.items || [])
-      .map((item) => {
-        const isBox = item.product_type === "box";
-        const label = isBox ? " [Caja]" : "";
-        return `- ${item.name}${label} x${item.quantity} | Subtotal: ${money(item.subtotal)}`;
-      })
-      .join("\n");
-
-    const itemsHtml = (order.items || [])
-      .map((item) => {
-        const isBox = item.product_type === "box";
-        const label = isBox
-          ? `<span style="font-size:11px;background:#fef9c3;color:#854d0e;border-radius:4px;padding:2px 6px;margin-left:6px;font-weight:700;">Caja</span>`
-          : "";
-        return `<li>${item.name}${label} x${item.quantity} — ${money(item.subtotal)}</li>`;
-      })
-      .join("");
+    const template = buildInternalSaleTemplate({ order, taxDocument });
 
     await sendEmail({
       to: recipients.join(","),
-      subject: `Nueva compra pagada #${shortOrder}${isCustomBox ? " — Caja personalizada" : ""}`,
-      text: `
-Nueva compra confirmada en CIBOX.
-
-Orden: ${orderId}
-${sourceText}Cliente: ${order.customer?.fullName || "—"}
-Email: ${order.customer?.email || "—"}
-Teléfono: ${order.customer?.phone || "—"}
-RUT: ${order.customer?.rut || "—"}
-
-Productos:
-${itemsText}
-
-Subtotal: ${money(order.subtotal)}
-Envío: ${textoDespacho(order)}
-Descuento: ${money(order.discount_amount)}
-Total pagado: ${money(order.total)}
-
-Dirección:
-${order.shipping?.address || "—"}, ${order.shipping?.city || "—"}, ${order.shipping?.region || "—"}
-      `.trim(),
-      html: `
-        <h2>Nueva compra pagada en CIBOX</h2>
-        <p><strong>Orden:</strong> ${orderId}</p>
-        ${sourceHtml}
-
-        <h3>Cliente</h3>
-        <p><strong>Nombre:</strong> ${order.customer?.fullName || "—"}</p>
-        <p><strong>Email:</strong> ${order.customer?.email || "—"}</p>
-        <p><strong>Teléfono:</strong> ${order.customer?.phone || "—"}</p>
-        <p><strong>RUT:</strong> ${order.customer?.rut || "—"}</p>
-
-        <h3>Productos</h3>
-        <ul>${itemsHtml}</ul>
-
-        <h3>Totales</h3>
-        <p><strong>Subtotal:</strong> ${money(order.subtotal)}</p>
-        <p><strong>Envío:</strong> ${textoDespacho(order)}</p>
-        <p><strong>Descuento:</strong> ${money(order.discount_amount)}</p>
-        <p><strong>Total pagado:</strong> ${money(order.total)}</p>
-
-        <h3>Dirección</h3>
-        <p>${order.shipping?.address || "—"}, ${order.shipping?.city || "—"}, ${order.shipping?.region || "—"}</p>
-      `,
+      subject: template.subject,
+      text: template.text,
+      html: template.html,
     });
   } catch (err) {
     logger.warn(
@@ -281,7 +210,7 @@ const handleApprovedOrderSideEffects = async (order) => {
   const taxDocument = await emitTaxDocumentForPaidOrder(order);
 
   sendPaymentApprovedEmail(order, taxDocument).catch(() => {});
-  sendInternalOrderNotificationEmail(order).catch(() => {});
+  sendInternalOrderNotificationEmail(order, taxDocument).catch(() => {});
 
   try {
     await createShipmentForPaidOrder(order);

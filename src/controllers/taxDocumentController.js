@@ -1,7 +1,8 @@
 import mongoose from "mongoose";
 import { asyncHandler } from "../middlewares/errorHandler.js";
 import { TaxDocument } from "../models/TaxDocument.js";
-import { ForbiddenError, NotFoundError } from "../utils/errors.js";
+import { ConflictError, ForbiddenError, NotFoundError } from "../utils/errors.js";
+import { logger } from "../utils/logger.js";
 import * as siiService from "../services/siiService.js";
 
 const getOrderModel = () => mongoose.models.Order || null;
@@ -80,6 +81,78 @@ export const getDocumentById = asyncHandler(async (req, res) => {
   }
 
   res.status(200).json({ success: true, data: { document: doc } });
+});
+
+/**
+ * Marcar a mano un documento pendiente como EMITIDO.
+ *
+ * Con la emisión automática apagada (SII_ENABLED=false) cada venta pagada deja
+ * un documento con folio nulo y estado "pending". La boleta real la emite una
+ * persona en el portal del SII, y acá anota el folio que le tocó para que el
+ * listado deje de mostrarla como pendiente.
+ *
+ * Es una anotación contable, no una emisión: nada se manda al SII desde aquí.
+ */
+export const markDocumentEmitted = asyncHandler(async (req, res) => {
+  const { folio, emitted_at } = req.body;
+
+  const doc = await TaxDocument.findById(req.params.id);
+  if (!doc) throw new NotFoundError("Documento no encontrado");
+
+  // Nunca se pisa un folio ya anotado en silencio: si la boleta ya figura
+  // emitida, quien la marcó antes puso un número y hay que revisarlo a mano.
+  if (doc.status === "accepted") {
+    throw new ConflictError(
+      `Esta boleta ya está marcada como emitida (folio ${doc.folio || "sin folio"})`,
+    );
+  }
+  if (doc.status === "voided") {
+    throw new ConflictError("Esta boleta está anulada: no se puede marcar como emitida");
+  }
+
+  // El folio tiene índice, pero NO único: la unicidad se comprueba acá. Dos
+  // boletas con el mismo folio dejarían la contabilidad sin forma de saber a
+  // qué venta corresponde cada una.
+  const conMismoFolio = await TaxDocument.findOne({ folio }).select("_id").lean();
+  if (conMismoFolio && String(conMismoFolio._id) !== String(doc._id)) {
+    throw new ConflictError(
+      `El folio ${folio} ya está usado por otro documento: dos boletas no pueden compartir folio`,
+    );
+  }
+
+  doc.folio = folio;
+  doc.status = "accepted";
+  doc.emitted_at = emitted_at ? new Date(emitted_at) : new Date();
+  // Deja de ser un documento de prueba: corresponde a uno real del SII.
+  doc.stub = false;
+
+  try {
+    await doc.save();
+  } catch (err) {
+    // El índice único parcial { order_id, type } cubre pending/accepted. Un
+    // documento rechazado que vuelve a "accepted" puede chocar con otro que ya
+    // esté activo para el mismo pedido y tipo: eso es un 409, no un 500.
+    if (err?.code === 11000) {
+      throw new ConflictError(
+        "Ya existe otro documento activo para este pedido y tipo: revísalo antes de marcar este",
+      );
+    }
+    throw err;
+  }
+
+  logger.info(
+    {
+      tax_document_id: String(doc._id),
+      order_id: String(doc.order_id),
+      type: doc.type,
+      folio: doc.folio,
+      emitted_at: doc.emitted_at,
+      by: req.user?.id,
+    },
+    "tax_document.marcado_emitido_a_mano",
+  );
+
+  res.status(200).json({ success: true, data: doc.toObject() });
 });
 
 export const voidDocument = asyncHandler(async (req, res) => {

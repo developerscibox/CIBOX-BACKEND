@@ -548,6 +548,170 @@ export const buildPaymentApprovedTemplate = ({ order, taxDocument = null }) => {
   };
 };
 
+/* ─────────────── Aviso interno: "Nueva compra pagada" ─────────────────────
+ * Va al equipo (developers@cibox.cl + los proveedores de los productos), no al
+ * cliente. Por eso NO lleva el botón "Seguir mi pedido" ni el cierre de
+ * "gracias por comprar": lo que necesita quien lo lee es el folio, con quién
+ * hablar y qué hay que armar.
+ *
+ * Usa el MISMO folio de 6 caracteres en mayúscula que el resto del sistema
+ * (folioDe): antes cortaba 8 caracteres en minúscula y el equipo terminaba
+ * buscando un número que la web no reconocía.
+ */
+
+// Teléfono para el enlace tel:. Deja solo dígitos y el "+" inicial, porque el
+// modelo lo guarda como lo escribió el cliente ("+56 9 1234 5678").
+const telHref = (fono) => {
+  const limpio = String(fono || "").replace(/[^\d+]/g, "");
+  return limpio.startsWith("+") ? `+${limpio.slice(1).replace(/\+/g, "")}` : limpio;
+};
+
+// Tarjeta con el folio grande, en el estilo de tarjetaFolio pero sin el botón
+// de seguimiento: el equipo no sigue el pedido, lo prepara.
+const tarjetaFolioInterna = (folio, subtitulo) => `
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:${C.fondo};border-radius:12px;">
+        <tr>
+          <td style="padding:18px 20px;text-align:center;">
+            <div style="font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:${C.gris};">Número de pedido</div>
+            <div style="font-size:30px;font-weight:900;letter-spacing:2px;color:${C.azul};margin:4px 0 0;">#${escapeHtml(folio)}</div>
+            ${subtitulo ? `<div style="font-size:12px;color:${C.gris};margin-top:8px;">${escapeHtml(subtitulo)}</div>` : ""}
+          </td>
+        </tr>
+      </table>`;
+
+export const buildInternalSaleTemplate = ({ order, taxDocument = null }) => {
+  const folio = folioDe(order);
+  const customer = order?.customer || {};
+  const payment = order?.payment || {};
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const unidades = unidadesDe(items);
+  const fecha = formatDate(order?.updated_at || order?.created_at);
+  const metodo = etiqueta(METODO_PAGO, payment.method, "—");
+  const estadoPago = etiqueta(ESTADO_PAGO, payment.status, "Aprobado");
+  const autorizacion = String(payment.authorization_code || "").trim();
+  const correo = String(customer.email || "").trim();
+  const fono = String(customer.phone || "").trim();
+  const resumen = `${unidades} ${unidades === 1 ? "unidad" : "unidades"} · ${money(order?.total)} · ${fecha}`;
+
+  const tipoDoc = taxDocument ? etiqueta(TIPO_DOCUMENTO, taxDocument.type, "Boleta") : "";
+  const estadoDoc = taxDocument ? etiqueta(ESTADO_DOCUMENTO, taxDocument.status, "—") : "";
+  const avisoStub = "Modo integración: documento de prueba, no válido tributariamente.";
+
+  const taxHtml = taxDocument
+    ? `
+      ${titulo("Documento tributario")}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+        <tr>
+          ${dato("Tipo", escapeHtml(tipoDoc))}
+          ${dato("Folio", escapeHtml(taxDocument.folio || "—"))}
+        </tr>
+        <tr>
+          ${dato("Estado", escapeHtml(estadoDoc))}
+        </tr>
+      </table>
+      ${taxDocument.stub ? `<p style="margin:0;font-size:13px;color:#92400E;">${escapeHtml(avisoStub)}</p>` : ""}`
+    : "";
+
+  const taxTexto = taxDocument
+    ? [
+        "",
+        "Documento tributario:",
+        `Tipo: ${tipoDoc}`,
+        `Folio: ${taxDocument.folio || "—"}`,
+        `Estado: ${estadoDoc}`,
+        taxDocument.stub ? avisoStub : null,
+      ]
+    : [];
+
+  const text = [
+    "Nueva compra pagada en CIBOX.",
+    "",
+    `Pedido: #${folio}`,
+    `Resumen: ${resumen}`,
+    franjaCajaTexto(order),
+    "",
+    "Cliente:",
+    `Nombre: ${customer.fullName || "—"}`,
+    `Correo: ${correo || "—"}`,
+    `Teléfono: ${fono || "—"}`,
+    `RUT: ${customer.rut || "—"}`,
+    "",
+    "Productos:",
+    productosTexto(items) || "(sin productos)",
+    "",
+    totalesTexto(order, "Total pagado"),
+    "",
+    bloqueEntregaTexto(order),
+    "",
+    "Pago:",
+    `Método: ${metodo}`,
+    `Estado: ${estadoPago}`,
+    `Fecha: ${fecha}`,
+    autorizacion ? `Código de autorización: ${autorizacion}` : null,
+    ...taxTexto,
+  ]
+    .filter((l) => l !== null)
+    .join("\n");
+
+  return {
+    subject: `Nueva compra pagada #${folio}${esCajaPersonalizada(order) ? " — Caja personalizada" : ""}`,
+    text,
+    html: baseLayout(`
+      ${cabecera({
+        icono: "&#36;",
+        encabezado: "Nueva compra pagada",
+        mensajeHtml: escapeHtml("Entró una compra pagada. Estos son los datos para preparar el pedido."),
+      })}
+
+      ${tarjetaFolioInterna(folio, resumen)}
+
+      ${esCajaPersonalizada(order) ? `<div style="margin-top:18px;">${franjaCajaHtml(order)}</div>` : ""}
+
+      ${titulo("Cliente")}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+        <tr>
+          ${dato("Nombre", escapeHtml(customer.fullName || "—"))}
+          ${dato(
+            "Correo",
+            correo
+              ? `<a href="mailto:${escapeAttr(correo)}" style="color:${C.azul};text-decoration:none;">${escapeHtml(correo)}</a>`
+              : "—",
+          )}
+        </tr>
+        <tr>
+          ${dato(
+            "Teléfono",
+            fono
+              ? `<a href="tel:${escapeAttr(telHref(fono))}" style="color:${C.azul};text-decoration:none;">${escapeHtml(fono)}</a>`
+              : "—",
+          )}
+          ${dato("RUT", escapeHtml(customer.rut || "—"))}
+        </tr>
+      </table>
+
+      ${titulo("Productos")}
+      ${tablaProductosHtml(items)}
+      ${tablaTotalesHtml(order, "Total pagado")}
+
+      ${bloqueEntregaHtml(order)}
+
+      ${titulo("Pago")}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+        <tr>
+          ${dato("Método", escapeHtml(metodo))}
+          ${dato("Estado", escapeHtml(estadoPago))}
+        </tr>
+        <tr>
+          ${dato("Fecha", escapeHtml(fecha))}
+          ${autorizacion ? dato("Código de autorización", escapeHtml(autorizacion)) : ""}
+        </tr>
+      </table>
+
+      ${taxHtml}
+    `),
+  };
+};
+
 // ── Pedido recibido ──────────────────────────────────────────────────────────
 
 // Los tres pasos de "Qué sigue" dependen de cómo paga: con tarjeta esperamos
