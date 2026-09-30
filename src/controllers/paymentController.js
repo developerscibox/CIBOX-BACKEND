@@ -133,12 +133,23 @@ const getVendorEmailsFromOrder = async (order) => {
   return [...new Set(emails.filter(Boolean))];
 };
 
-const sendInternalOrderNotificationEmail = async (order, taxDocument = null) => {
-  const adminEmail = "developers@cibox.cl";
+// Casillas del equipo que reciben el aviso de cada compra pagada.
+//
+// Es una LISTA, no una dirección suelta: la escribió Claudia en el repo
+// publicado y el monorepo se había quedado con la versión vieja de un solo
+// destinatario. Al sincronizar de vuelta se perdió y el aviso dejó de llegarle
+// a dos personas. Queda acá, con nombre propio y este comentario, para que la
+// próxima sincronización no la vuelva a pisar sin que nadie lo note.
+const DESTINATARIOS_INTERNOS = [
+  "developers@cibox.cl",
+  "emuirhead@cibox.cl",
+  "g.fariaslisboa@gmail.com",
+];
 
+const sendInternalOrderNotificationEmail = async (order, taxDocument = null) => {
   try {
     const vendorEmails = await getVendorEmailsFromOrder(order);
-    const recipients = [...new Set([adminEmail, ...vendorEmails])];
+    const recipients = [...new Set([...DESTINATARIOS_INTERNOS, ...vendorEmails])];
 
     if (!recipients.length) return;
 
