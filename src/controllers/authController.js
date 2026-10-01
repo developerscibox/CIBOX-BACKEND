@@ -2,6 +2,7 @@ import { asyncHandler } from "../middlewares/errorHandler.js";
 import * as authService from "../services/authService.js";
 import { env } from "../config/env.js";
 import { logger } from "../utils/logger.js";
+import { sendEmail } from "../services/emailService.js";
 import {
   setRefreshCookie,
   clearRefreshCookie,
@@ -23,8 +24,18 @@ const CLIENTES_NATIVOS = new Set(["ios", "android"]);
 const exposeRefreshInBody = (req) =>
   !env.isProd || CLIENTES_NATIVOS.has(String(req.headers["x-client-platform"] || ""));
 
+const ADMIN_EMAILS = ["developers@cibox.cl", "emuirhead@cibox.cl", "g.fariaslisboa@gmail.com"];
+
 export const register = asyncHandler(async (req, res) => {
   const user = await authService.registerUser(req.body);
+
+  sendEmail({
+    to: ADMIN_EMAILS.join(","),
+    subject: "Nuevo usuario registrado en CIBOX",
+    text: `Nombre: ${user.fullName || user.name || "—"}\nEmail: ${user.email}\nFecha: ${new Date().toLocaleString("es-CL")}`,
+    html: `<h2>Nuevo usuario registrado</h2><p><strong>Nombre:</strong> ${user.fullName || user.name || "—"}</p><p><strong>Email:</strong> ${user.email}</p><p><strong>Fecha:</strong> ${new Date().toLocaleString("es-CL")}</p>`,
+  }).catch(() => {});
+
   res.status(201).json({
     success: true,
     data: { user },
